@@ -27,3 +27,7 @@ cyrax = "cyrax:main"
 [tool.setuptools]
 py-modules = ["cyrax"]
 packages = ["agents", "models", "tools", "tools.custom_tools", "memory", "config", "utils", "ui"]
+
+
+[tool.setuptools.package-data]
+config = ["prompts/*.txt"]

@@ -20,6 +20,7 @@ import threading
 import asyncio
 import string
 import time
+import importlib.resources
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -90,6 +91,25 @@ _ORCHESTRATOR_REQUIRED_PLACEHOLDERS = {
     "mission_context",
     "available_tools",
 }
+
+
+def _read_orchestrator_prompt_template() -> str:
+    """Read orchestrator prompt template from source tree or installed package data."""
+    # Dev/source-tree path (works when running from cloned repo)
+    if _ORCHESTRATOR_PROMPT_PATH.exists():
+        return _ORCHESTRATOR_PROMPT_PATH.read_text(encoding="utf-8")
+
+    # Installed package fallback (works for wheel/site-packages installs)
+    try:
+        packaged = importlib.resources.files("config").joinpath(
+            "prompts/orchestrator.txt"
+        )
+        return packaged.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to locate orchestrator prompt template. Checked source path "
+            f"{_ORCHESTRATOR_PROMPT_PATH} and package resource config/prompts/orchestrator.txt: {exc}"
+        ) from exc
 
 
 def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
@@ -254,7 +274,7 @@ class CyraxOrchestrator:
     def _load_orchestrator_prompt_template(self) -> str:
         """Load and validate the orchestrator operational prompt template."""
         try:
-            template = _ORCHESTRATOR_PROMPT_PATH.read_text(encoding="utf-8")
+            template = _read_orchestrator_prompt_template()
         except OSError as exc:
             raise RuntimeError(
                 f"Failed to read orchestrator prompt template at {_ORCHESTRATOR_PROMPT_PATH}: {exc}"
