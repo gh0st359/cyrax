@@ -135,16 +135,9 @@ class ScopeEnforcer:
         # Check domain
         return self._is_domain_allowed(host)
 
-    def check_command(self, command: str) -> tuple[bool, str]:
-        """
-        Check if a shell command targets in-scope resources.
-        Returns (allowed, reason).
-        """
-        if not self.enabled:
-            return True, ""
-
-        # Extract URLs from the command
-        urls = re.findall(r'https?://[^\s\'"]+', command)
+    def _check_text_for_scope(self, text: str) -> tuple[bool, str]:
+        """Run scope extraction checks on arbitrary text."""
+        urls = re.findall(r'https?://[^\s\'"]+', text)
         for url in urls:
             if not self.is_in_scope(url):
                 parsed = urlparse(url)
@@ -153,8 +146,7 @@ class ScopeEnforcer:
                     f"Your targets are: {', '.join(self._raw_targets)}"
                 )
 
-        # Extract IPs from the command
-        ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', command)
+        ips = re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', text)
         for ip in ips:
             if ip in ("127.0.0.1", "0.0.0.0"):
                 continue
@@ -164,15 +156,12 @@ class ScopeEnforcer:
                     f"Your targets are: {', '.join(self._raw_targets)}"
                 )
 
-        # Extract domain-like patterns from common tools
-        # nslookup domain, dig domain, host domain, ping domain, curl domain
         tool_patterns = [
             r'\b(?:nslookup|dig|host|ping|whois|nmap|curl|wget|nikto|gobuster|ffuf|dirb|wfuzz|sqlmap|hydra)\s+(?:-[^\s]+\s+)*([a-zA-Z0-9][-a-zA-Z0-9.]+\.[a-zA-Z]{2,})',
         ]
         for pattern in tool_patterns:
-            for match in re.finditer(pattern, command):
+            for match in re.finditer(pattern, text):
                 domain = match.group(1).lower()
-                # Skip common file extensions and flags
                 if domain.endswith(('.py', '.sh', '.txt', '.conf', '.log', '.xml', '.json', '.html')):
                     continue
                 if not self.is_in_scope(domain):
@@ -180,6 +169,68 @@ class ScopeEnforcer:
                         f"'{domain}' is NOT in your authorized scope. "
                         f"Your targets are: {', '.join(self._raw_targets)}"
                     )
+
+        return True, ""
+
+    def _extract_wrapped_payloads(self, command: str) -> list[str]:
+        """Extract command payloads from wrappers like bash -c, python -c, pwsh -Command."""
+        payloads: list[str] = []
+        wrappers = {
+            "bash": "-c",
+            "sh": "-c",
+            "zsh": "-c",
+            "dash": "-c",
+            "ksh": "-c",
+            "python": "-c",
+            "python3": "-c",
+            "py": "-c",
+            "powershell": "-command",
+            "pwsh": "-command",
+        }
+
+        tokens = re.findall(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\S+', command)
+        if not tokens:
+            return payloads
+
+        binary = tokens[0].strip('"\'').lower()
+        if binary not in wrappers:
+            return payloads
+
+        marker = wrappers[binary]
+        for i, token in enumerate(tokens[1:], start=1):
+            normalized = token.lower()
+            if normalized == marker or (marker == "-command" and normalized == "-c"):
+                if i + 1 < len(tokens):
+                    payloads.append(tokens[i + 1].strip('"\''))
+                break
+            if normalized.startswith(marker + "="):
+                payloads.append(token.split("=", 1)[1].strip('"\''))
+                break
+
+        return payloads
+
+    def check_command(self, command: str, _depth: int = 0) -> tuple[bool, str]:
+        """
+        Check if a shell command targets in-scope resources.
+        Returns (allowed, reason).
+        """
+        if not self.enabled:
+            return True, ""
+
+        allowed, reason = self._check_text_for_scope(command)
+        if not allowed:
+            return False, reason
+
+        if _depth >= 4:
+            return True, ""
+
+        for payload in self._extract_wrapped_payloads(command):
+            allowed, reason = self._check_text_for_scope(payload)
+            if not allowed:
+                return False, reason
+            nested_ok, nested_reason = self.check_command(payload, _depth=_depth + 1)
+            if not nested_ok:
+                return False, nested_reason
 
         return True, ""
 
