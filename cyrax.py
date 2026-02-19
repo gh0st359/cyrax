@@ -15,6 +15,7 @@ import os
 import re
 import argparse
 import hashlib
+import difflib
 import threading
 import asyncio
 from datetime import datetime, timezone
@@ -652,12 +653,22 @@ RECON METHODOLOGY — go deep, not wide:
         accumulated = response
         current_response = response
         seen_hashes_this_turn: set[str] = set()
+        echo_regens = 0
 
         for depth in range(self._max_response_depth):
             # Check for pause request
             if self._pause_requested:
                 self._pause_requested = False
                 break
+
+            current_response, accumulated, regenerated = self._maybe_regenerate_echo_response(
+                response=current_response,
+                accumulated=accumulated,
+                depth=depth,
+                echo_regens=echo_regens,
+            )
+            if regenerated:
+                echo_regens += 1
 
             # Deduplication: detect if the LLM is repeating itself
             full_hash = hashlib.md5(current_response.encode()).hexdigest()
@@ -775,6 +786,103 @@ RECON METHODOLOGY — go deep, not wide:
         # Don't clear _consecutive_cmd_failures here — persist across the response loop
         # so the AI retains awareness of accumulated failures
         return accumulated
+
+    @staticmethod
+    def _tokenize_text(text: str) -> set[str]:
+        """Tokenize freeform text for lightweight overlap comparison."""
+        return {
+            token for token in re.findall(r"[a-zA-Z0-9_]+", text.lower())
+            if len(token) > 2
+        }
+
+    def _get_latest_user_message(self) -> str:
+        """Get the latest direct user prompt (excluding internal/tool feedback messages)."""
+        for message in reversed(self.conversation.messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "")
+            if content.startswith("[Action Results]") or content.startswith("[Internal Feedback]"):
+                continue
+            return content
+        return ""
+
+    def _detect_user_echo_overlap(self, response: str, latest_user_message: str) -> Optional[dict]:
+        """Detect when model output overly echoes the user's latest message."""
+        response_clean = response.strip()
+        user_clean = latest_user_message.strip()
+        if not response_clean or not user_clean:
+            return None
+
+        user_tokens = self._tokenize_text(user_clean)
+        response_tokens = self._tokenize_text(response_clean)
+        if not user_tokens or not response_tokens:
+            return None
+
+        token_overlap = len(user_tokens & response_tokens) / len(user_tokens)
+        sequence_overlap = difflib.SequenceMatcher(
+            None,
+            user_clean.lower(),
+            response_clean.lower(),
+        ).ratio()
+
+        if token_overlap >= 0.8 or sequence_overlap >= 0.85:
+            return {
+                "token_overlap": round(token_overlap, 3),
+                "sequence_overlap": round(sequence_overlap, 3),
+                "response_preview": response_clean[:200],
+                "user_preview": user_clean[:200],
+            }
+        return None
+
+    def _maybe_regenerate_echo_response(
+        self,
+        response: str,
+        accumulated: str,
+        depth: int,
+        echo_regens: int,
+    ) -> tuple[str, str, bool]:
+        """Regenerate if response appears to be an echoed user prompt with no actions."""
+        if _find_all_actions(response):
+            return response, accumulated, False
+
+        latest_user_message = self._get_latest_user_message()
+        overlap = self._detect_user_echo_overlap(response, latest_user_message)
+        if not overlap:
+            return response, accumulated, False
+
+        self.logger.log_event(
+            "echo_response_detected",
+            agent_id="CYRAX",
+            data={"depth": depth, **overlap},
+        )
+        self.logger.warning(
+            "Detected echoed response with high user-message overlap; requesting regeneration"
+        )
+
+        if echo_regens >= 1:
+            return response, accumulated, False
+
+        feedback = (
+            "[Internal Feedback]\n"
+            "Your prior response mostly echoed the user's input and contained no action blocks. "
+            "Regenerate with new analysis and concrete next steps. "
+            "Do not paraphrase the user message."
+        )
+        self.conversation.add_message("user", feedback)
+        self.logger.log_event(
+            "echo_regeneration_requested",
+            agent_id="CYRAX",
+            data={"depth": depth, "reason": "high_overlap_no_actions"},
+        )
+
+        try:
+            followup = self._stream_response(self._build_system_prompt())
+            self.conversation.add_message("assistant", followup)
+            self.logger.log_conversation("assistant", followup)
+            return followup, f"{accumulated}\n\n{followup}", True
+        except Exception as e:
+            self.logger.log_error("CYRAX", f"Echo regeneration failed: {e}")
+            return response, accumulated, False
 
     @staticmethod
     def _get_cmd_pattern(command: str) -> str:
