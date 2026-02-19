@@ -137,6 +137,9 @@ class CyraxOrchestrator:
     def __init__(self, config: dict):
         self.config = config
 
+        # Safety: Scope enforcement and permission gates
+        self.scope = ScopeEnforcer()  # Configured when target is set
+
         # Initialize logging
         log_config = config.get("logging", {})
         self.logger = init_logger(
@@ -154,6 +157,7 @@ class CyraxOrchestrator:
             work_dir=tool_config.get("work_dir", "") or default_work,
             timeout=tool_config.get("timeout", 300),
             allow_dangerous=tool_config.get("allow_dangerous", False),
+            scope_enforcer=self.scope,
         )
         self.tools = ToolRegistry(executor=executor)
 
@@ -176,8 +180,6 @@ class CyraxOrchestrator:
         )
         self.campaign = CampaignState()
 
-        # Safety: Scope enforcement and permission gates
-        self.scope = ScopeEnforcer()  # Configured when target is set
         self.permission_gate = PermissionGate(
             auto_approve=config.get("safety", {}).get("auto_approve", False)
         )
@@ -297,6 +299,7 @@ class CyraxOrchestrator:
         targets = [t.strip() for t in targets if t.strip()]
         if targets:
             self.scope = ScopeEnforcer(targets)
+            self.tools.executor.scope_enforcer = self.scope
             self.logger.info(f"Scope configured: {targets}")
 
             # Update mission memory with core context

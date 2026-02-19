@@ -16,6 +16,7 @@ from typing import Optional
 
 from utils.logging import get_logger
 from utils.platform_info import IS_WINDOWS, get_default_work_dir, get_shell_name
+from utils.safety import ScopeEnforcer
 
 
 def strip_markdown_fences(command: str) -> str:
@@ -462,11 +463,13 @@ class ToolExecutor:
         work_dir: str = "",
         timeout: int = 300,
         allow_dangerous: bool = False,
+        scope_enforcer: Optional[ScopeEnforcer] = None,
     ):
         self.work_dir = Path(work_dir) if work_dir else Path(get_default_work_dir())
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.allow_dangerous = allow_dangerous
+        self.scope_enforcer = scope_enforcer
         self.env = os.environ.copy()
         self.env["TERM"] = "dumb"  # Prevent color codes in tool output
 
@@ -651,6 +654,16 @@ class ToolExecutor:
         """
         if not interpreter:
             interpreter = "python" if IS_WINDOWS else "bash"
+
+        if self.scope_enforcer and self.scope_enforcer.enabled:
+            scope_ok, scope_reason = self.scope_enforcer.check_command(script_content)
+            if not scope_ok:
+                return CommandResult(
+                    command=f"{interpreter} <script>",
+                    stdout="",
+                    stderr=scope_reason,
+                    exit_code=-1,
+                )
 
         # Determine file suffix
         if "python" in interpreter:
