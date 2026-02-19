@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import threading
 import asyncio
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -196,6 +197,7 @@ class CyraxOrchestrator:
             on_report=self._on_agent_report,
             on_permission_request=self._on_agent_permission_request,
             on_agent_complete=self._on_agent_complete,
+            on_agent_status=self._on_agent_status,
         )
 
         # Pending permission requests from agent subprocesses
@@ -315,6 +317,12 @@ class CyraxOrchestrator:
         self.mission.save_to_dir(self._campaign_dir)
         conv_file = self._campaign_dir / "conversation.json"
         conv_file.write_text(self.conversation.to_json())
+
+
+    def _mark_agents_orphaned_if_active(self):
+        """Mark active agents as orphaned before persisting/exit."""
+        if self.agent_pool.get_running():
+            self.campaign.mark_agents_orphaned()
 
     def _get_metasploit_guidance(self) -> str:
         """Return Metasploit usage guidance if MSF tools are available."""
@@ -1199,7 +1207,16 @@ RECON METHODOLOGY — go deep, not wide:
         )
 
         # Register in campaign state with PID info (PID comes via IPC later)
-        self.campaign.register_agent(agent_id, agent_type, task)
+        status = self.agent_pool.get_status().get(agent_id, {})
+        self.campaign.register_agent(
+            agent_id,
+            agent_type,
+            task,
+            pid=status.get("pid", 0),
+            socket_path=status.get("socket_path", ""),
+            session_id=self._session_id,
+            socket_generation=status.get("socket_generation", 1),
+        )
 
         # Return placeholder — agent is running in background
         return {
@@ -1257,6 +1274,15 @@ RECON METHODOLOGY — go deep, not wide:
         if not allowed:
             display.show_info(f"Permission denied for {agent_id}: {reason}")
 
+    def _on_agent_status(self, agent_id: str, payload: dict):
+        """Callback: persist heartbeat/reconnect metadata from agent updates."""
+        self.campaign.update_agent_reconnect_metadata(
+            agent_id,
+            session_id=payload.get("session_id", self._session_id),
+            socket_generation=payload.get("socket_generation"),
+            last_heartbeat=time.time(),
+        )
+
     def _on_agent_complete(self, agent_id: str, report: dict):
         """Callback: agent subprocess finished."""
         status = report.get("status", "unknown")
@@ -1283,6 +1309,15 @@ RECON METHODOLOGY — go deep, not wide:
 
         # Update campaign state
         self.campaign.update_agent_status(agent_id, status)
+        pool_status = self.agent_pool.get_status().get(agent_id, {})
+        self.campaign.update_agent_reconnect_metadata(
+            agent_id,
+            pid=pool_status.get("pid"),
+            socket_path=pool_status.get("socket_path"),
+            socket_generation=pool_status.get("socket_generation"),
+            last_heartbeat=pool_status.get("last_heartbeat"),
+            session_id=self._session_id,
+        )
         self.mission.update_agent(agent_id, status)
 
         self.logger.log_event("agent_complete", agent_id, {
@@ -1309,6 +1344,16 @@ RECON METHODOLOGY — go deep, not wide:
                 )
                 if success:
                     reconnected += 1
+                    info = self.agent_pool.get_status().get(agent_id, {})
+                    self.campaign.update_agent_reconnect_metadata(
+                        agent_id,
+                        pid=pid,
+                        socket_path=info.get("socket_path"),
+                        socket_generation=info.get("socket_generation"),
+                        last_heartbeat=info.get("last_heartbeat"),
+                        session_id=self._session_id,
+                    )
+                    self.campaign.update_agent_status(agent_id, "active")
                     display.show_info(
                         f"Reconnected to orphaned agent {agent_id} (PID {pid})"
                     )
@@ -1361,6 +1406,7 @@ RECON METHODOLOGY — go deep, not wide:
         if cmd == "/pause":
             if self._campaign_mode:
                 self.campaign.status = "paused"
+                self._mark_agents_orphaned_if_active()
                 self._save_campaign_state()
                 display.show_success(
                     f"Campaign '{self._campaign_name}' paused and saved to {self._campaign_dir}/"
@@ -1596,6 +1642,7 @@ RECON METHODOLOGY — go deep, not wide:
                     user_input = display.prompt_user()
                     if not user_input or user_input.strip().lower() in ("exit", "/exit"):
                         self.campaign.status = "paused"
+                        self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
                         break
                     self._consecutive_empty_turns = 0
@@ -1628,6 +1675,7 @@ RECON METHODOLOGY — go deep, not wide:
                 result = self.handle_command(stripped)
                 if result == "EXIT":
                     if self._campaign_mode:
+                        self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
                         display.show_cyrax_message("Campaign state saved. Ending session.")
                     else:
@@ -1657,6 +1705,7 @@ RECON METHODOLOGY — go deep, not wide:
                     ai_thread.join(timeout=15)
                 except KeyboardInterrupt:
                     if self._campaign_mode:
+                        self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
                         display.show_cyrax_message("Campaign state saved. Ending session.")
                     else:
@@ -1690,6 +1739,10 @@ RECON METHODOLOGY — go deep, not wide:
         """Clean up resources: agents, browser, DB, logs."""
         try:
             running = self.agent_pool.get_running()
+            if running:
+                self.campaign.mark_agents_orphaned()
+                if self._campaign_mode:
+                    self._save_campaign_state()
             self.agent_pool.shutdown(wait=bool(running))
         except Exception:
             pass
@@ -1931,6 +1984,7 @@ def main():
                 cyrax.run()
             except KeyboardInterrupt:
                 if cyrax._campaign_mode:
+                    cyrax._mark_agents_orphaned_if_active()
                     cyrax._save_campaign_state()
                     display.show_cyrax_message("\nInterrupted. Campaign state saved.")
                 else:
@@ -1942,6 +1996,7 @@ def main():
             cyrax.run()
         except KeyboardInterrupt:
             if cyrax._campaign_mode:
+                cyrax._mark_agents_orphaned_if_active()
                 cyrax._save_campaign_state()
                 display.show_cyrax_message("\nInterrupted. Campaign state saved.")
             else:
