@@ -69,10 +69,11 @@ class AgentProcess:
         agent_type: str,
         task: str,
         pid: int,
-        process: subprocess.Popen,
+        process: Optional[subprocess.Popen],
         manifest_path: str,
         log_file: str,
         socket_path: str,
+        socket_generation: int = 1,
     ):
         self.agent_id = agent_id
         self.agent_type = agent_type
@@ -82,6 +83,7 @@ class AgentProcess:
         self.manifest_path = manifest_path
         self.log_file = log_file
         self.socket_path = socket_path
+        self.socket_generation = socket_generation
         self.status = "starting"
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.iteration = 0
@@ -112,6 +114,7 @@ class SubprocessAgentPool:
         self._completed: list[dict] = []
         self._lock = threading.Lock()
         self._logger = get_logger()
+        self._reconnect_acks: dict[str, threading.Event] = {}
 
         # IPC server
         self._ipc = IPCServer(session_id, on_message=self._handle_ipc_message)
@@ -170,6 +173,7 @@ class SubprocessAgentPool:
                     self._lock.acquire()
 
         # Create IPC socket for this agent
+        socket_generation = 1
         socket_path = self._ipc.create_socket(agent_id)
 
         # Prepare log file
@@ -191,6 +195,12 @@ class SubprocessAgentPool:
             "log_file": log_file,
             "campaign_dir": campaign_dir,
             "can_spawn_agents": False,
+            "reconnect": {
+                "session_id": self.session_id,
+                "agent_id": agent_id,
+                "socket_generation": socket_generation,
+                "last_heartbeat": time.time(),
+            },
         }
 
         manifest_path = str(self._ipc.socket_dir / f"{agent_id}_manifest.json")
@@ -227,6 +237,7 @@ class SubprocessAgentPool:
             manifest_path=manifest_path,
             log_file=log_file,
             socket_path=socket_path,
+            socket_generation=socket_generation,
         )
 
         with self._lock:
@@ -335,6 +346,9 @@ class SubprocessAgentPool:
                     "iteration": agent.iteration,
                     "last_cmd": agent.last_cmd[:60] if agent.last_cmd else "",
                     "started_at": agent.started_at,
+                    "socket_generation": agent.socket_generation,
+                    "socket_path": agent.socket_path,
+                    "last_heartbeat": agent.last_heartbeat,
                 }
             return status
 
@@ -393,27 +407,68 @@ class SubprocessAgentPool:
         if not _is_pid_alive(pid):
             return False
 
-        # Re-create IPC socket and wait for agent to reconnect
-        # (agent's heartbeat will connect on next cycle)
+        expected_session_id = agent_info.get("session_id", "")
+        if expected_session_id and expected_session_id != self.session_id:
+            self._logger.warning(
+                f"Skipping reconnect for {agent_id}: session mismatch "
+                f"({expected_session_id} != {self.session_id})"
+            )
+            return False
+
+        previous_generation = int(agent_info.get("socket_generation", 1) or 1)
+        next_generation = previous_generation + 1
+
+        # Re-create IPC socket and wait for explicit reconnect handshake
         new_socket_path = self._ipc.create_socket(agent_id)
 
-        agent_proc = AgentProcess(
-            agent_id=agent_id,
-            agent_type=agent_info.get("type", "unknown"),
-            task=agent_info.get("task", "unknown"),
-            pid=pid,
-            process=None,  # Can't recover Popen object
-            manifest_path="",
-            log_file=agent_info.get("log_file", ""),
-            socket_path=new_socket_path,
-        )
-        agent_proc.status = "active"
+        manifest = {
+            "ipc_socket_path": new_socket_path,
+            "reconnect": {
+                "session_id": self.session_id,
+                "agent_id": agent_id,
+                "socket_generation": next_generation,
+                "last_heartbeat": time.time(),
+            },
+        }
+        manifest_path = self._ipc.socket_dir / f"{agent_id}_reconnect.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
+
+        ack_event = threading.Event()
+        with self._lock:
+            self._reconnect_acks[agent_id] = ack_event
+            self._agents[agent_id] = AgentProcess(
+                agent_id=agent_id,
+                agent_type=agent_info.get("type", "unknown"),
+                task=agent_info.get("task", "unknown"),
+                pid=pid,
+                process=None,
+                manifest_path="",
+                log_file=agent_info.get("log_file", ""),
+                socket_path=new_socket_path,
+                socket_generation=next_generation,
+            )
+            self._agents[agent_id].status = "reconnecting"
+
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            if not _is_pid_alive(pid):
+                break
+            if ack_event.wait(timeout=0.5):
+                with self._lock:
+                    self._reconnect_acks.pop(agent_id, None)
+                self._logger.info(
+                    f"Reconnected to orphaned agent {agent_id} (PID {pid}, gen {next_generation})"
+                )
+                return True
 
         with self._lock:
-            self._agents[agent_id] = agent_proc
-
-        self._logger.info(f"Reconnected to orphaned agent {agent_id} (PID {pid})")
-        return True
+            self._reconnect_acks.pop(agent_id, None)
+            agent = self._agents.get(agent_id)
+            if agent:
+                agent.status = "failed"
+        self._ipc.close_agent(agent_id)
+        self._logger.warning(f"Reconnect ack not received for {agent_id}; failing fast")
+        return False
 
     def _handle_ipc_message(self, message: IPCMessage):
         """Central IPC message dispatcher."""
@@ -428,13 +483,49 @@ class SubprocessAgentPool:
             if agent:
                 agent.status = "active"
                 agent.pid = payload.get("pid", agent.pid)
+                agent.socket_generation = int(payload.get("socket_generation", agent.socket_generation) or agent.socket_generation)
+                agent.last_heartbeat = time.time()
                 self._logger.info(f"Agent {agent_id} ready (PID {agent.pid})")
+
+        elif msg_type == "agent_reconnect":
+            if agent:
+                expected_gen = agent.socket_generation
+                provided_gen = int(payload.get("socket_generation", 0) or 0)
+                provided_session = payload.get("session_id", "")
+                if provided_session != self.session_id or provided_gen != expected_gen:
+                    self._logger.warning(
+                        f"Rejecting reconnect from {agent_id}: session/gen mismatch"
+                    )
+                    self._ipc.send(agent_id, IPCMessage(
+                        "agent_reconnect_ack", agent_id,
+                        {
+                            "accepted": False,
+                            "reason": "session_or_generation_mismatch",
+                            "expected_generation": expected_gen,
+                        },
+                    ))
+                else:
+                    agent.status = "active"
+                    agent.pid = payload.get("pid", agent.pid)
+                    agent.last_heartbeat = time.time()
+                    self._ipc.send(agent_id, IPCMessage(
+                        "agent_reconnect_ack", agent_id,
+                        {
+                            "accepted": True,
+                            "socket_generation": expected_gen,
+                        },
+                    ))
+                    with self._lock:
+                        event = self._reconnect_acks.get(agent_id)
+                    if event:
+                        event.set()
 
         elif msg_type == "status_update":
             if agent:
                 agent.iteration = payload.get("iteration", agent.iteration)
                 agent.status = payload.get("status", agent.status)
                 agent.last_cmd = payload.get("last_cmd", "")
+                agent.socket_generation = int(payload.get("socket_generation", agent.socket_generation) or agent.socket_generation)
                 agent.last_heartbeat = time.time()
                 # Update tmux pane title
                 if self._tmux_enabled:

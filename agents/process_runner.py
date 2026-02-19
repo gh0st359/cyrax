@@ -153,6 +153,12 @@ class AgentProcessRunner:
         self.agent_type = self.manifest["agent_type"]
         self.task = self.manifest["task"]
         self.log_file = self.manifest.get("log_file", f"/tmp/cyrax-agent-{self.agent_id}.log")
+        reconnect_meta = self.manifest.get("reconnect", {})
+        self._reconnect_session_id = reconnect_meta.get("session_id", "")
+        self._socket_generation = int(reconnect_meta.get("socket_generation", 1) or 1)
+        self._last_heartbeat = float(reconnect_meta.get("last_heartbeat", time.time()) or time.time())
+        self._reconnect_acked = False
+        self._last_reconnect_attempt = 0.0
 
         # Set up file logging
         self._setup_logging()
@@ -177,6 +183,7 @@ class AgentProcessRunner:
         self._shutdown_requested = False
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._listener_thread: Optional[threading.Thread] = None
+        self._reconnect_thread: Optional[threading.Thread] = None
 
     def _setup_logging(self):
         """Set up logging to the agent's log file."""
@@ -263,6 +270,69 @@ class AgentProcessRunner:
 
         return agent
 
+
+    def _reconnect_manifest_path(self) -> Path:
+        return Path(self.log_file).parent / f"{self.agent_id}_reconnect.json"
+
+    def _attempt_reconnect(self) -> bool:
+        reconnect_file = self._reconnect_manifest_path()
+        if not reconnect_file.exists():
+            return False
+        try:
+            reconnect_data = json.loads(reconnect_file.read_text())
+        except Exception:
+            return False
+
+        socket_path = reconnect_data.get("ipc_socket_path", "")
+        reconnect_meta = reconnect_data.get("reconnect", {})
+        if not socket_path:
+            return False
+
+        self.ipc.update_socket_path(socket_path)
+        try:
+            self.ipc.connect(timeout=5.0)
+        except Exception:
+            return False
+
+        self._reconnect_session_id = reconnect_meta.get("session_id", self._reconnect_session_id)
+        self._socket_generation = int(reconnect_meta.get("socket_generation", self._socket_generation) or self._socket_generation)
+        self._reconnect_acked = False
+        self.ipc.send(IPCMessage(
+            "agent_reconnect",
+            self.agent_id,
+            {
+                "pid": os.getpid(),
+                "session_id": self._reconnect_session_id,
+                "socket_generation": self._socket_generation,
+                "last_heartbeat": self._last_heartbeat,
+            },
+        ))
+
+        ack_deadline = time.time() + 8.0
+        while time.time() < ack_deadline and not self._shutdown_requested:
+            if self._reconnect_acked:
+                self._last_reconnect_attempt = time.time()
+                return True
+            ack = self.ipc.recv(timeout=0.5)
+            if ack and ack.msg_type == "agent_reconnect_ack":
+                if ack.payload.get("accepted", False):
+                    self._reconnect_acked = True
+                    self._last_reconnect_attempt = time.time()
+                    return True
+                return False
+
+        return False
+
+    def _reconnect_monitor_loop(self):
+        """Detect orchestrator disconnect and periodically attempt reconnect."""
+        while not self._shutdown_requested:
+            if not self.ipc.connected:
+                now = time.time()
+                if (now - self._last_reconnect_attempt) >= 5.0:
+                    self._last_reconnect_attempt = now
+                    self._attempt_reconnect()
+            time.sleep(1.0)
+
     def run(self):
         """
         Main execution:
@@ -281,7 +351,11 @@ class AgentProcessRunner:
             self.ipc.send(IPCMessage(
                 "agent_ready",
                 self.agent_id,
-                {"pid": os.getpid()},
+                {
+                    "pid": os.getpid(),
+                    "session_id": self._reconnect_session_id,
+                    "socket_generation": self._socket_generation,
+                },
             ))
 
             # Start background threads
@@ -294,6 +368,11 @@ class AgentProcessRunner:
                 target=self._ipc_listener_loop, daemon=True, name=f"{self.agent_id}-listener"
             )
             self._listener_thread.start()
+
+            self._reconnect_thread = threading.Thread(
+                target=self._reconnect_monitor_loop, daemon=True, name=f"{self.agent_id}-reconnect"
+            )
+            self._reconnect_thread.start()
 
             # Execute the agent
             report = self.agent.execute()
@@ -334,8 +413,11 @@ class AgentProcessRunner:
                             self.agent._recent_cmds[-1][:80]
                             if self.agent._recent_cmds else ""
                         ),
+                        "session_id": self._reconnect_session_id,
+                        "socket_generation": self._socket_generation,
                     },
                 ))
+                self._last_heartbeat = time.time()
             except Exception:
                 pass
             # Sleep in small increments for fast shutdown response
@@ -350,6 +432,8 @@ class AgentProcessRunner:
             try:
                 msg = self.ipc.recv(timeout=1.0)
                 if msg is None:
+                    if not self.ipc.connected:
+                        time.sleep(0.2)
                     continue
 
                 if msg.msg_type == "permission_response":
@@ -378,8 +462,12 @@ class AgentProcessRunner:
                         {
                             "iteration": self.agent.iteration if self.agent else 0,
                             "status": self.agent.status if self.agent else "unknown",
+                            "socket_generation": self._socket_generation,
                         },
                     ))
+
+                elif msg.msg_type == "agent_reconnect_ack":
+                    self._reconnect_acked = msg.payload.get("accepted", False)
 
             except Exception:
                 if self._shutdown_requested:

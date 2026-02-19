@@ -178,7 +178,13 @@ class IPCServer:
                         conn, _ = sock.accept()
                         conn.setblocking(False)
                         with self._lock:
+                            old = self._connections.get(agent_id)
                             self._connections[agent_id] = conn
+                        if old:
+                            try:
+                                old.close()
+                            except OSError:
+                                pass
                     except (OSError, BlockingIOError):
                         pass
                 elif kind == "client":
@@ -342,6 +348,26 @@ class IPCClient:
         raise ConnectionError(
             f"Failed to connect to IPC socket {self.socket_path}: {last_err}"
         )
+
+    @property
+    def connected(self) -> bool:
+        """Whether the client currently has an active socket connection."""
+        return self._connected
+
+    def update_socket_path(self, socket_path: str):
+        """Update the target socket address and reset connection state."""
+        self.socket_path = socket_path
+        if ":" in socket_path and not socket_path.startswith("/"):
+            parts = socket_path.rsplit(":", 1)
+            self._host = parts[0]
+            self._port = int(parts[1])
+            self._use_tcp = True
+        else:
+            self._host = ""
+            self._port = 0
+            self._use_tcp = False
+
+        self.close()
 
     def send(self, message: IPCMessage):
         """Send a message to the orchestrator."""
