@@ -1144,6 +1144,7 @@ RECON METHODOLOGY — go deep, not wide:
                     severity=severity,
                     description=details,
                     target=self.campaign.target,
+                    target_url_host=self.campaign.target,
                 )
                 self.logger.log_finding("CYRAX", severity, title, details)
                 self.mission.add_vuln(title, url=self.campaign.target,
@@ -1252,6 +1253,8 @@ RECON METHODOLOGY — go deep, not wide:
             severity=severity,
             description=details,
             target=self.campaign.target,
+            agent_id=agent_id,
+            target_url_host=self.campaign.target,
         )
         self.logger.log_finding(agent_id, severity, title, details)
         self.mission.add_vuln(title, url=self.campaign.target,
@@ -1308,6 +1311,8 @@ RECON METHODOLOGY — go deep, not wide:
                     severity=finding.get("severity", "info"),
                     description=finding.get("details", finding.get("description", "")),
                     target=self.campaign.target,
+                    agent_id=agent_id,
+                    target_url_host=self.campaign.target,
                 )
 
         # Update campaign state
@@ -1591,6 +1596,13 @@ RECON METHODOLOGY — go deep, not wide:
         for i, f in enumerate(findings, 1):
             lines.extend([
                 f"## {i}. [{f['severity'].upper()}] {f['title']}",
+                f"",
+                f"- ID: {f.get('id', 'N/A')}",
+                f"- Timestamp: {f.get('stored_at', 'N/A')}",
+                f"- Agent: {f.get('agent_id', 'N/A') or 'N/A'}",
+                f"- Target: {f.get('target_url_host', f.get('target', 'N/A')) or 'N/A'}",
+                f"- Command/Action ID: {f.get('command_action_id', 'N/A') or 'N/A'}",
+                f"- Output Ref: {f.get('raw_output_ref', 'N/A') or 'N/A'}",
                 f"",
                 f"{f['description']}",
                 f"",
