@@ -104,22 +104,60 @@ class CampaignState:
         )
         self.attack_path.append(step)
 
-    def register_agent(self, agent_id: str, agent_type: str, task: str,
-                       pid: int = 0, socket_path: str = ""):
-        """Register an active agent with optional process tracking."""
+    def register_agent(
+        self,
+        agent_id: str,
+        agent_type: str,
+        task: str,
+        pid: int = 0,
+        socket_path: str = "",
+        session_id: str = "",
+        socket_generation: int = 1,
+    ):
+        """Register an active agent with process/reconnect tracking metadata."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        now_epoch = datetime.now(timezone.utc).timestamp()
         self.active_agents[agent_id] = {
             "type": agent_type,
             "task": task,
             "status": "active",
-            "started": datetime.now(timezone.utc).isoformat(),
+            "started": now_iso,
             "pid": pid,
             "socket_path": socket_path,
+            "session_id": session_id,
+            "socket_generation": socket_generation,
+            "last_heartbeat": now_epoch,
         }
 
     def update_agent_status(self, agent_id: str, status: str):
         """Update an agent's status."""
         if agent_id in self.active_agents:
             self.active_agents[agent_id]["status"] = status
+
+    def update_agent_reconnect_metadata(
+        self,
+        agent_id: str,
+        *,
+        session_id: Optional[str] = None,
+        pid: Optional[int] = None,
+        socket_path: Optional[str] = None,
+        socket_generation: Optional[int] = None,
+        last_heartbeat: Optional[float] = None,
+    ):
+        """Update reconnect metadata fields for an agent if present."""
+        if agent_id not in self.active_agents:
+            return
+        info = self.active_agents[agent_id]
+        if session_id is not None:
+            info["session_id"] = session_id
+        if pid is not None:
+            info["pid"] = pid
+        if socket_path is not None:
+            info["socket_path"] = socket_path
+        if socket_generation is not None:
+            info["socket_generation"] = socket_generation
+        if last_heartbeat is not None:
+            info["last_heartbeat"] = last_heartbeat
 
     def get_orphaned_agents(self) -> list[dict]:
         """Find agents that were running when the orchestrator last exited."""

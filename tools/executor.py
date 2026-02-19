@@ -16,6 +16,7 @@ from typing import Optional
 
 from utils.logging import get_logger
 from utils.platform_info import IS_WINDOWS, get_default_work_dir, get_shell_name
+from utils.safety import ScopeEnforcer
 
 
 def strip_markdown_fences(command: str) -> str:
@@ -462,11 +463,13 @@ class ToolExecutor:
         work_dir: str = "",
         timeout: int = 300,
         allow_dangerous: bool = False,
+        scope_enforcer: Optional[ScopeEnforcer] = None,
     ):
         self.work_dir = Path(work_dir) if work_dir else Path(get_default_work_dir())
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.allow_dangerous = allow_dangerous
+        self.scope_enforcer = scope_enforcer
         self.env = os.environ.copy()
         self.env["TERM"] = "dumb"  # Prevent color codes in tool output
 
@@ -476,6 +479,26 @@ class ToolExecutor:
             return False
         cmd_lower = command.lower().strip()
         return any(dangerous in cmd_lower for dangerous in DANGEROUS_COMMANDS)
+
+    def _resolve_user_path(self, user_path: str) -> Path:
+        """Resolve a user-supplied path against the executor working directory."""
+        return (self.work_dir / user_path).resolve()
+
+    def _validate_user_path(self, action: str, user_path: str) -> tuple[Optional[Path], Optional[CommandResult]]:
+        """Ensure resolved paths stay within the configured work directory."""
+        logger = get_logger()
+        work_dir_resolved = self.work_dir.resolve()
+        resolved_path = self._resolve_user_path(user_path)
+
+        if resolved_path != work_dir_resolved and work_dir_resolved not in resolved_path.parents:
+            msg = (
+                f"Rejected path outside work directory: requested='{user_path}', "
+                f"resolved='{resolved_path}', work_dir='{work_dir_resolved}'"
+            )
+            logger.log_error("executor", msg)
+            return None, CommandResult(f"{action}({user_path})", "", msg, 1)
+
+        return resolved_path, None
 
     def execute(
         self,
@@ -632,6 +655,16 @@ class ToolExecutor:
         if not interpreter:
             interpreter = "python" if IS_WINDOWS else "bash"
 
+        if self.scope_enforcer and self.scope_enforcer.enabled:
+            scope_ok, scope_reason = self.scope_enforcer.check_command(script_content)
+            if not scope_ok:
+                return CommandResult(
+                    command=f"{interpreter} <script>",
+                    stdout="",
+                    stderr=scope_reason,
+                    exit_code=-1,
+                )
+
         # Determine file suffix
         if "python" in interpreter:
             suffix = ".py"
@@ -680,7 +713,11 @@ class ToolExecutor:
 
     def write_file(self, path: str, content: str) -> CommandResult:
         """Write content to a file in the work directory."""
-        full_path = self.work_dir / path
+        full_path, error_result = self._validate_user_path("write_file", path)
+        if error_result:
+            return error_result
+
+        assert full_path is not None
         full_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             full_path.write_text(content)
@@ -700,7 +737,11 @@ class ToolExecutor:
 
     def read_file(self, path: str) -> CommandResult:
         """Read a file from the work directory."""
-        full_path = self.work_dir / path
+        full_path, error_result = self._validate_user_path("read_file", path)
+        if error_result:
+            return error_result
+
+        assert full_path is not None
         try:
             content = full_path.read_text()
             return CommandResult(f"read_file({path})", content, "", 0)

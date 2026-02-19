@@ -42,7 +42,70 @@ class KnowledgeBase:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_category ON knowledge(category)"
         )
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS findings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                description TEXT NOT NULL,
+                target TEXT NOT NULL DEFAULT '',
+                evidence TEXT NOT NULL DEFAULT '',
+                command_action_id TEXT NOT NULL DEFAULT '',
+                raw_output_ref TEXT NOT NULL DEFAULT '',
+                agent_id TEXT NOT NULL DEFAULT '',
+                target_url_host TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                legacy_full_key TEXT UNIQUE
+            )"""
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_findings_created_at ON findings(created_at)"
+        )
+        self._migrate_legacy_findings()
         self._conn.commit()
+
+    def _migrate_legacy_findings(self):
+        """Migrate legacy findings from the key/value table into append-only findings."""
+        legacy_rows = self._conn.execute(
+            "SELECT full_key, value, stored_at FROM knowledge WHERE category = 'findings'"
+        ).fetchall()
+        if not legacy_rows:
+            return
+
+        for full_key, value_json, stored_at in legacy_rows:
+            try:
+                finding = json.loads(value_json)
+            except json.JSONDecodeError:
+                finding = {"description": value_json}
+
+            self._conn.execute(
+                """INSERT OR IGNORE INTO findings (
+                    title,
+                    severity,
+                    description,
+                    target,
+                    evidence,
+                    command_action_id,
+                    raw_output_ref,
+                    agent_id,
+                    target_url_host,
+                    created_at,
+                    legacy_full_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    finding.get("title", full_key),
+                    finding.get("severity", "info"),
+                    finding.get("description", ""),
+                    finding.get("target", ""),
+                    finding.get("evidence", ""),
+                    finding.get("command_action_id", ""),
+                    finding.get("raw_output_ref", ""),
+                    finding.get("agent_id", ""),
+                    finding.get("target_url_host", finding.get("target", "")),
+                    stored_at,
+                    full_key,
+                ),
+            )
 
     def store(self, category: str, key: str, value: dict):
         """Store a piece of knowledge."""
@@ -163,24 +226,76 @@ class KnowledgeBase:
         description: str,
         target: str = "",
         evidence: str = "",
+        command_action_id: str = "",
+        raw_output_ref: str = "",
+        agent_id: str = "",
+        target_url_host: str = "",
     ):
-        """Store a security finding."""
-        key = f"{severity}_{title}".replace(" ", "_")[:80]
-        self.store(
-            "findings",
-            key,
-            {
-                "title": title,
-                "severity": severity,
-                "description": description,
-                "target": target,
-                "evidence": evidence,
-            },
+        """Store a security finding in append-only findings storage."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO findings (
+                title,
+                severity,
+                description,
+                target,
+                evidence,
+                command_action_id,
+                raw_output_ref,
+                agent_id,
+                target_url_host,
+                created_at,
+                legacy_full_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
+            (
+                title,
+                severity,
+                description,
+                target,
+                evidence,
+                command_action_id,
+                raw_output_ref,
+                agent_id,
+                target_url_host or target,
+                now,
+            ),
         )
+        self._conn.commit()
 
     def get_findings(self) -> list[dict]:
-        """Get all stored findings."""
-        return [e["value"] for e in self.list_category("findings")]
+        """Get all stored findings ordered by creation time."""
+        rows = self._conn.execute(
+            """SELECT
+                id,
+                title,
+                severity,
+                description,
+                target,
+                evidence,
+                command_action_id,
+                raw_output_ref,
+                agent_id,
+                target_url_host,
+                created_at
+            FROM findings
+            ORDER BY created_at ASC, id ASC"""
+        ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "title": row[1],
+                "severity": row[2],
+                "description": row[3],
+                "target": row[4],
+                "evidence": row[5],
+                "command_action_id": row[6],
+                "raw_output_ref": row[7],
+                "agent_id": row[8],
+                "target_url_host": row[9],
+                "stored_at": row[10],
+            }
+            for row in rows
+        ]
 
     def store_technique(self, name: str, description: str, success: bool, details: str = ""):
         """Store a technique that was attempted."""

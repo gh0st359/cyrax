@@ -159,61 +159,69 @@ if HAS_TEXTUAL:
         @work(thread=True)
         def _run_ai_turn(self, user_input: str) -> None:
             """Run an AI turn in a background thread."""
-            self._ai_running = True
+            self._run_ai_turn_loop(user_input)
+
+        def _run_ai_turn_loop(self, user_input: str) -> None:
+            """Run one or more AI turns iteratively for campaign auto-continue."""
             output = self.query_one("#output", RichLog)
             status = self.query_one("#status-bar", Static)
+            pending_input = user_input
 
-            self.call_from_thread(status.update, "AI thinking...")
+            while pending_input is not None:
+                current_input = pending_input
+                pending_input = None
+                self._ai_running = True
+                self.call_from_thread(status.update, "AI thinking...")
 
-            try:
-                response = self.orchestrator.chat(user_input)
-                self._turn_count += 1
+                try:
+                    self.orchestrator.chat(current_input)
+                    self._turn_count += 1
 
-                # Update tracking
-                self.orchestrator._turn_action_counts.append(
-                    self.orchestrator._actions_executed_this_turn
-                )
-                if self.orchestrator._actions_executed_this_turn == 0:
-                    self.orchestrator._consecutive_empty_turns += 1
-                else:
-                    self.orchestrator._consecutive_empty_turns = 0
-
-                if self.orchestrator._campaign_mode:
-                    self.orchestrator._save_campaign_state()
-
-                # Auto-continue in campaign mode
-                if (
-                    self.orchestrator._campaign_mode
-                    and self.orchestrator.campaign.status == "active"
-                    and self.orchestrator._consecutive_empty_turns < 3
-                ):
-                    # Check for queued user message
-                    if self.orchestrator._queued_user_message:
-                        next_input = self.orchestrator._queued_user_message
-                        self.orchestrator._queued_user_message = None
+                    # Update tracking
+                    self.orchestrator._turn_action_counts.append(
+                        self.orchestrator._actions_executed_this_turn
+                    )
+                    if self.orchestrator._actions_executed_this_turn == 0:
+                        self.orchestrator._consecutive_empty_turns += 1
                     else:
-                        next_input = "Continue."
+                        self.orchestrator._consecutive_empty_turns = 0
 
+                    if self.orchestrator._campaign_mode:
+                        self.orchestrator._save_campaign_state()
+
+                    # Auto-continue in campaign mode
+                    if (
+                        self.orchestrator._campaign_mode
+                        and self.orchestrator.campaign.status == "active"
+                        and self.orchestrator._consecutive_empty_turns < 3
+                    ):
+                        # Queued user input should override automatic continuation.
+                        if self.orchestrator._queued_user_message:
+                            pending_input = self.orchestrator._queued_user_message
+                            self.orchestrator._queued_user_message = None
+                        else:
+                            pending_input = "Continue."
+
+                        self.call_from_thread(
+                            output.write,
+                            f"\n[dim][Turn {self._turn_count + 1}][/dim]"
+                        )
+
+                except KeyboardInterrupt:
                     self.call_from_thread(
                         output.write,
-                        f"\n[dim][Turn {self._turn_count + 1}][/dim]"
+                        "[yellow]Interrupted. Type to continue or /exit to quit.[/yellow]"
                     )
-                    self._run_ai_turn(next_input)
-                    return
-
-            except KeyboardInterrupt:
-                self.call_from_thread(
-                    output.write,
-                    "[yellow]Interrupted. Type to continue or /exit to quit.[/yellow]"
-                )
-            except Exception as e:
-                self.call_from_thread(
-                    output.write,
-                    f"[red]Error: {rich_escape(str(e))}[/red]"
-                )
-            finally:
-                self._ai_running = False
-                self.call_from_thread(status.update, "Ready")
+                    break
+                except Exception as e:
+                    self.call_from_thread(
+                        output.write,
+                        f"[red]Error: {rich_escape(str(e))}[/red]"
+                    )
+                    break
+                finally:
+                    self._ai_running = False
+                    self.call_from_thread(status.update, "Ready")
 
         def action_pause(self) -> None:
             """Ctrl+C handler — pause the current operation."""

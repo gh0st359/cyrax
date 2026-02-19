@@ -15,6 +15,7 @@ import os
 import re
 import argparse
 import hashlib
+import difflib
 import threading
 import asyncio
 import string
@@ -147,6 +148,9 @@ class CyraxOrchestrator:
     def __init__(self, config: dict):
         self.config = config
 
+        # Safety: Scope enforcement and permission gates
+        self.scope = ScopeEnforcer()  # Configured when target is set
+
         # Initialize logging
         log_config = config.get("logging", {})
         self.logger = init_logger(
@@ -164,6 +168,7 @@ class CyraxOrchestrator:
             work_dir=tool_config.get("work_dir", "") or default_work,
             timeout=tool_config.get("timeout", 300),
             allow_dangerous=tool_config.get("allow_dangerous", False),
+            scope_enforcer=self.scope,
         )
         self.tools = ToolRegistry(executor=executor)
 
@@ -186,8 +191,6 @@ class CyraxOrchestrator:
         )
         self.campaign = CampaignState()
 
-        # Safety: Scope enforcement and permission gates
-        self.scope = ScopeEnforcer()  # Configured when target is set
         self.permission_gate = PermissionGate(
             auto_approve=config.get("safety", {}).get("auto_approve", False)
         )
@@ -207,6 +210,7 @@ class CyraxOrchestrator:
             on_report=self._on_agent_report,
             on_permission_request=self._on_agent_permission_request,
             on_agent_complete=self._on_agent_complete,
+            on_agent_status=self._on_agent_status,
         )
 
         # Pending permission requests from agent subprocesses
@@ -334,6 +338,7 @@ class CyraxOrchestrator:
         targets = [t.strip() for t in targets if t.strip()]
         if targets:
             self.scope = ScopeEnforcer(targets)
+            self.tools.executor.scope_enforcer = self.scope
             self.logger.info(f"Scope configured: {targets}")
 
             # Update mission memory with core context
@@ -354,6 +359,12 @@ class CyraxOrchestrator:
         self.mission.save_to_dir(self._campaign_dir)
         conv_file = self._campaign_dir / "conversation.json"
         conv_file.write_text(self.conversation.to_json())
+
+
+    def _mark_agents_orphaned_if_active(self):
+        """Mark active agents as orphaned before persisting/exit."""
+        if self.agent_pool.get_running():
+            self.campaign.mark_agents_orphaned()
 
     def _get_metasploit_guidance(self) -> str:
         """Return Metasploit usage guidance if MSF tools are available."""
@@ -617,12 +628,22 @@ RESPONSE STYLE:
         accumulated = response
         current_response = response
         seen_hashes_this_turn: set[str] = set()
+        echo_regens = 0
 
         for depth in range(self._max_response_depth):
             # Check for pause request
             if self._pause_requested:
                 self._pause_requested = False
                 break
+
+            current_response, accumulated, regenerated = self._maybe_regenerate_echo_response(
+                response=current_response,
+                accumulated=accumulated,
+                depth=depth,
+                echo_regens=echo_regens,
+            )
+            if regenerated:
+                echo_regens += 1
 
             # Deduplication: detect if the LLM is repeating itself
             full_hash = hashlib.md5(current_response.encode()).hexdigest()
@@ -740,6 +761,103 @@ RESPONSE STYLE:
         # Don't clear _consecutive_cmd_failures here — persist across the response loop
         # so the AI retains awareness of accumulated failures
         return accumulated
+
+    @staticmethod
+    def _tokenize_text(text: str) -> set[str]:
+        """Tokenize freeform text for lightweight overlap comparison."""
+        return {
+            token for token in re.findall(r"[a-zA-Z0-9_]+", text.lower())
+            if len(token) > 2
+        }
+
+    def _get_latest_user_message(self) -> str:
+        """Get the latest direct user prompt (excluding internal/tool feedback messages)."""
+        for message in reversed(self.conversation.messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "")
+            if content.startswith("[Action Results]") or content.startswith("[Internal Feedback]"):
+                continue
+            return content
+        return ""
+
+    def _detect_user_echo_overlap(self, response: str, latest_user_message: str) -> Optional[dict]:
+        """Detect when model output overly echoes the user's latest message."""
+        response_clean = response.strip()
+        user_clean = latest_user_message.strip()
+        if not response_clean or not user_clean:
+            return None
+
+        user_tokens = self._tokenize_text(user_clean)
+        response_tokens = self._tokenize_text(response_clean)
+        if not user_tokens or not response_tokens:
+            return None
+
+        token_overlap = len(user_tokens & response_tokens) / len(user_tokens)
+        sequence_overlap = difflib.SequenceMatcher(
+            None,
+            user_clean.lower(),
+            response_clean.lower(),
+        ).ratio()
+
+        if token_overlap >= 0.8 or sequence_overlap >= 0.85:
+            return {
+                "token_overlap": round(token_overlap, 3),
+                "sequence_overlap": round(sequence_overlap, 3),
+                "response_preview": response_clean[:200],
+                "user_preview": user_clean[:200],
+            }
+        return None
+
+    def _maybe_regenerate_echo_response(
+        self,
+        response: str,
+        accumulated: str,
+        depth: int,
+        echo_regens: int,
+    ) -> tuple[str, str, bool]:
+        """Regenerate if response appears to be an echoed user prompt with no actions."""
+        if _find_all_actions(response):
+            return response, accumulated, False
+
+        latest_user_message = self._get_latest_user_message()
+        overlap = self._detect_user_echo_overlap(response, latest_user_message)
+        if not overlap:
+            return response, accumulated, False
+
+        self.logger.log_event(
+            "echo_response_detected",
+            agent_id="CYRAX",
+            data={"depth": depth, **overlap},
+        )
+        self.logger.warning(
+            "Detected echoed response with high user-message overlap; requesting regeneration"
+        )
+
+        if echo_regens >= 1:
+            return response, accumulated, False
+
+        feedback = (
+            "[Internal Feedback]\n"
+            "Your prior response mostly echoed the user's input and contained no action blocks. "
+            "Regenerate with new analysis and concrete next steps. "
+            "Do not paraphrase the user message."
+        )
+        self.conversation.add_message("user", feedback)
+        self.logger.log_event(
+            "echo_regeneration_requested",
+            agent_id="CYRAX",
+            data={"depth": depth, "reason": "high_overlap_no_actions"},
+        )
+
+        try:
+            followup = self._stream_response(self._build_system_prompt())
+            self.conversation.add_message("assistant", followup)
+            self.logger.log_conversation("assistant", followup)
+            return followup, f"{accumulated}\n\n{followup}", True
+        except Exception as e:
+            self.logger.log_error("CYRAX", f"Echo regeneration failed: {e}")
+            return response, accumulated, False
 
     @staticmethod
     def _get_cmd_pattern(command: str) -> str:
@@ -1098,6 +1216,7 @@ RESPONSE STYLE:
                     severity=severity,
                     description=details,
                     target=self.campaign.target,
+                    target_url_host=self.campaign.target,
                 )
                 self.logger.log_finding("CYRAX", severity, title, details)
                 self.mission.add_vuln(title, url=self.campaign.target,
@@ -1164,7 +1283,16 @@ RESPONSE STYLE:
         )
 
         # Register in campaign state with PID info (PID comes via IPC later)
-        self.campaign.register_agent(agent_id, agent_type, task)
+        status = self.agent_pool.get_status().get(agent_id, {})
+        self.campaign.register_agent(
+            agent_id,
+            agent_type,
+            task,
+            pid=status.get("pid", 0),
+            socket_path=status.get("socket_path", ""),
+            session_id=self._session_id,
+            socket_generation=status.get("socket_generation", 1),
+        )
 
         # Return placeholder — agent is running in background
         return {
@@ -1197,6 +1325,8 @@ RESPONSE STYLE:
             severity=severity,
             description=details,
             target=self.campaign.target,
+            agent_id=agent_id,
+            target_url_host=self.campaign.target,
         )
         self.logger.log_finding(agent_id, severity, title, details)
         self.mission.add_vuln(title, url=self.campaign.target,
@@ -1222,6 +1352,15 @@ RESPONSE STYLE:
         if not allowed:
             display.show_info(f"Permission denied for {agent_id}: {reason}")
 
+    def _on_agent_status(self, agent_id: str, payload: dict):
+        """Callback: persist heartbeat/reconnect metadata from agent updates."""
+        self.campaign.update_agent_reconnect_metadata(
+            agent_id,
+            session_id=payload.get("session_id", self._session_id),
+            socket_generation=payload.get("socket_generation"),
+            last_heartbeat=time.time(),
+        )
+
     def _on_agent_complete(self, agent_id: str, report: dict):
         """Callback: agent subprocess finished."""
         status = report.get("status", "unknown")
@@ -1244,10 +1383,21 @@ RESPONSE STYLE:
                     severity=finding.get("severity", "info"),
                     description=finding.get("details", finding.get("description", "")),
                     target=self.campaign.target,
+                    agent_id=agent_id,
+                    target_url_host=self.campaign.target,
                 )
 
         # Update campaign state
         self.campaign.update_agent_status(agent_id, status)
+        pool_status = self.agent_pool.get_status().get(agent_id, {})
+        self.campaign.update_agent_reconnect_metadata(
+            agent_id,
+            pid=pool_status.get("pid"),
+            socket_path=pool_status.get("socket_path"),
+            socket_generation=pool_status.get("socket_generation"),
+            last_heartbeat=pool_status.get("last_heartbeat"),
+            session_id=self._session_id,
+        )
         self.mission.update_agent(agent_id, status)
 
         self.logger.log_event("agent_complete", agent_id, {
@@ -1274,6 +1424,16 @@ RESPONSE STYLE:
                 )
                 if success:
                     reconnected += 1
+                    info = self.agent_pool.get_status().get(agent_id, {})
+                    self.campaign.update_agent_reconnect_metadata(
+                        agent_id,
+                        pid=pid,
+                        socket_path=info.get("socket_path"),
+                        socket_generation=info.get("socket_generation"),
+                        last_heartbeat=info.get("last_heartbeat"),
+                        session_id=self._session_id,
+                    )
+                    self.campaign.update_agent_status(agent_id, "active")
                     display.show_info(
                         f"Reconnected to orphaned agent {agent_id} (PID {pid})"
                     )
@@ -1326,6 +1486,7 @@ RESPONSE STYLE:
         if cmd == "/pause":
             if self._campaign_mode:
                 self.campaign.status = "paused"
+                self._mark_agents_orphaned_if_active()
                 self._save_campaign_state()
                 display.show_success(
                     f"Campaign '{self._campaign_name}' paused and saved to {self._campaign_dir}/"
@@ -1508,6 +1669,13 @@ RESPONSE STYLE:
             lines.extend([
                 f"## {i}. [{f['severity'].upper()}] {f['title']}",
                 f"",
+                f"- ID: {f.get('id', 'N/A')}",
+                f"- Timestamp: {f.get('stored_at', 'N/A')}",
+                f"- Agent: {f.get('agent_id', 'N/A') or 'N/A'}",
+                f"- Target: {f.get('target_url_host', f.get('target', 'N/A')) or 'N/A'}",
+                f"- Command/Action ID: {f.get('command_action_id', 'N/A') or 'N/A'}",
+                f"- Output Ref: {f.get('raw_output_ref', 'N/A') or 'N/A'}",
+                f"",
                 f"{f['description']}",
                 f"",
                 f"---",
@@ -1561,6 +1729,7 @@ RESPONSE STYLE:
                     user_input = display.prompt_user()
                     if not user_input or user_input.strip().lower() in ("exit", "/exit"):
                         self.campaign.status = "paused"
+                        self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
                         break
                     self._consecutive_empty_turns = 0
@@ -1593,6 +1762,7 @@ RESPONSE STYLE:
                 result = self.handle_command(stripped)
                 if result == "EXIT":
                     if self._campaign_mode:
+                        self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
                         display.show_cyrax_message("Campaign state saved. Ending session.")
                     else:
@@ -1622,6 +1792,7 @@ RESPONSE STYLE:
                     ai_thread.join(timeout=15)
                 except KeyboardInterrupt:
                     if self._campaign_mode:
+                        self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
                         display.show_cyrax_message("Campaign state saved. Ending session.")
                     else:
@@ -1655,6 +1826,10 @@ RESPONSE STYLE:
         """Clean up resources: agents, browser, DB, logs."""
         try:
             running = self.agent_pool.get_running()
+            if running:
+                self.campaign.mark_agents_orphaned()
+                if self._campaign_mode:
+                    self._save_campaign_state()
             self.agent_pool.shutdown(wait=bool(running))
         except Exception:
             pass
@@ -1896,6 +2071,7 @@ def main():
                 cyrax.run()
             except KeyboardInterrupt:
                 if cyrax._campaign_mode:
+                    cyrax._mark_agents_orphaned_if_active()
                     cyrax._save_campaign_state()
                     display.show_cyrax_message("\nInterrupted. Campaign state saved.")
                 else:
@@ -1907,6 +2083,7 @@ def main():
             cyrax.run()
         except KeyboardInterrupt:
             if cyrax._campaign_mode:
+                cyrax._mark_agents_orphaned_if_active()
                 cyrax._save_campaign_state()
                 display.show_cyrax_message("\nInterrupted. Campaign state saved.")
             else:
