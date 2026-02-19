@@ -18,6 +18,7 @@ import hashlib
 import difflib
 import threading
 import asyncio
+import string
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,15 @@ AGENT_CLASSES = {
     "web": WebAgent,
     "cloud": CloudAgent,
     "osint": OSINTAgent,
+}
+
+
+_ORCHESTRATOR_PROMPT_PATH = Path(__file__).parent / "config" / "prompts" / "orchestrator.txt"
+_ORCHESTRATOR_REQUIRED_PLACEHOLDERS = {
+    "target",
+    "scope",
+    "mission_context",
+    "available_tools",
 }
 
 
@@ -237,6 +247,34 @@ class CyraxOrchestrator:
 
         # Pause flag
         self._pause_requested = False
+
+        # Load and validate prompt templates at startup
+        self._orchestrator_prompt_template = self._load_orchestrator_prompt_template()
+
+    def _load_orchestrator_prompt_template(self) -> str:
+        """Load and validate the orchestrator operational prompt template."""
+        try:
+            template = _ORCHESTRATOR_PROMPT_PATH.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"Failed to read orchestrator prompt template at {_ORCHESTRATOR_PROMPT_PATH}: {exc}"
+            ) from exc
+
+        formatter = string.Formatter()
+        placeholders = {
+            field_name
+            for _, field_name, _, _ in formatter.parse(template)
+            if field_name
+        }
+        missing = sorted(_ORCHESTRATOR_REQUIRED_PLACEHOLDERS - placeholders)
+        if missing:
+            raise ValueError(
+                "Invalid orchestrator prompt template "
+                f"({_ORCHESTRATOR_PROMPT_PATH}): missing required placeholders: "
+                f"{', '.join(missing)}"
+            )
+
+        return template
 
     def start_campaign(self, name: str, objective: str = ""):
         """Start or resume a named campaign with persistent state."""
@@ -455,92 +493,18 @@ RESPONSE STYLE:
             )
 
         # === OPERATIONAL MODE: target is set — execute actions ===
-        return f"""You are CYRAX, an autonomous AI red team operator conducting an authorized penetration test.
-
-TARGET: {target}
-SCOPE: {scope_desc}
-
-RULES (read these first):
-1. Think aloud in 1-2 natural sentences, then output action blocks. Nothing after the action blocks.
-2. No markdown: no ### headers, no **bold**, no bullet points, no numbered lists.
-3. Do not repeat what the user said. Do not write "Objective", "Action Plan", "Next Steps".
-4. Do not end with "Let me know" or any filler. Do not ask the user to confirm or respond.
-5. You are autonomous. Make decisions and act. Never ask the user to do things manually.
-6. Put ONLY the command inside [EXECUTE] blocks. No comments, no markdown, no prose.
-7. After navigating to a new page, call browser.links() or browser.forms() BEFORE constructing URLs. Never guess URL paths.
-8. Only report [FINDING] with actual command output as proof.
-9. If a command fails, try a different approach. Never retry the exact same command.
-10. When writing Python files with [WRITE_FILE], start code at column 0 — no extra indentation.
-
-ACTION FORMAT:
-[EXECUTE] <shell_command> [/EXECUTE]
-[EXECUTE] browser.<method>(<args>) [/EXECUTE]
-[WRITE_FILE path="script.py"] <code> [/WRITE_FILE]
-[SPAWN type="recon"] <task_description> [/SPAWN]
-[KILL agent="AGENT-ID" reason="optional reason"]
-[FINDING severity="high" title="Title"] <evidence> [/FINDING]
-[STORE category="hosts" key="name"] <data> [/STORE]
-Agent types: recon, exploit, post, ad, web, cloud, osint
-
-PARALLEL AGENTS:
-- Agents run as background subprocesses and report findings via IPC.
-- Spawn multiple agents for parallel work: port scanning, directory enumeration, vuln testing.
-- You decide how many agents to spawn based on the situation — 1, 5, 10, or more.
-- Each agent has its own browser, tools, and model context.
-- Agents cannot spawn sub-agents (anti-recursion).
-- Use [KILL] to stop agents that are no longer needed.
-
-{active_agents_block}
-
-EXAMPLE (correct):
-I see a login form. I'll try default credentials first.
-[EXECUTE] browser.fill("input[name='username']", "admin") [/EXECUTE]
-[EXECUTE] browser.fill("input[name='password']", "password") [/EXECUTE]
-[EXECUTE] browser.submit() [/EXECUTE]
-
-{mission_context}
-
-{platform_context}
-
-WORKSPACE: {workspace_context}
-ENGAGEMENT STATE: {campaign_summary}
-KNOWLEDGE BASE: {knowledge_summary}
-TOOLS: {available_tools}
-
-BROWSER COMMANDS (ONLY these — do NOT invent methods):
-browser.goto(url), browser.back(), browser.refresh(), browser.content(), browser.html(),
-browser.title(), browser.url(), browser.click(sel), browser.fill(sel, val), browser.type(sel, text),
-browser.press(key), browser.select(sel, val), browser.submit(), browser.screenshot(),
-browser.query(sel), browser.links(), browser.forms(), browser.evaluate("js"),
-browser.cookies(), browser.set_cookie(name, val, domain), browser.local_storage(),
-browser.session_storage(), browser.intercept_requests(), browser.get_intercepted(),
-browser.set_headers({{...}}), browser.crawl(url, max_pages=30), browser.test_xss(url, param),
-browser.new_tab(url)
-
-ADDITIONAL RULES:
-- ONE command per [EXECUTE] block.
-- Python scripts: [WRITE_FILE path="x.py"] then [EXECUTE] python x.py [/EXECUTE].
-- browser.click() and browser.submit() return page content. Read it before acting.
-- Fallback chain: browser.submit() -> browser.evaluate('document.forms[0].submit()') -> direct HTTP POST.
-- Use [SPAWN] for parallel work: multiple vuln tests, multiple endpoint scans.
-- Do NOT invent browser methods like browser.test_sql_injection(). Use sqlmap or Python scripts instead.
-- If same approach fails twice, switch technique completely.
-- On Windows: use 'findstr' not 'grep', 'type' not 'cat'. For complex logic, write Python.
-- Generate wordlists inline in Python scripts — never rely on external wordlist files.
-- Stay in scope. Do NOT follow redirects to unrelated sites.
-
-RECON METHODOLOGY — go deep, not wide:
-1. PASSIVE: WHOIS, DNS, certificate transparency
-2. CONTENT DISCOVERY: robots.txt, sitemap.xml, .well-known/, security.txt
-3. DIRECTORY ENUMERATION: Python script with inline wordlist
-4. JS/API ANALYSIS: browser.html() for endpoints, browser.intercept_requests() for XHR
-5. INPUT VECTORS: browser.forms() for all input points
-6. TECHNOLOGY FINGERPRINTING: headers (Server, X-Powered-By), meta tags
-7. AUTHENTICATION: test login, registration, password reset flows
-8. ERROR HANDLING: malformed input to trigger stack traces
-
-{metasploit_guidance}
-"""
+        return self._orchestrator_prompt_template.format(
+            target=target,
+            scope=scope_desc,
+            active_agents=active_agents_block,
+            mission_context=mission_context,
+            platform_context=platform_context,
+            workspace_context=workspace_context,
+            campaign_state=campaign_summary,
+            knowledge_summary=knowledge_summary,
+            available_tools=available_tools,
+            metasploit_guidance=metasploit_guidance,
+        )
 
     def chat(self, user_message: str) -> str:
         """
