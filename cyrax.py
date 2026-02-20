@@ -1214,6 +1214,10 @@ RESPONSE STYLE:
                             f"The agent will report findings via IPC as they are discovered. "
                             f"Use [KILL agent=\"{report['agent_id']}\"] to stop it."
                         )
+                    elif report.get("status") == "skipped":
+                        action_results.append(
+                            f"[Agent Spawn Skipped]\nSummary: {report['summary']}"
+                        )
                     else:
                         action_results.append(
                             f"[Agent {report['agent_id']} Report]\n"
@@ -1290,6 +1294,40 @@ RESPONSE STYLE:
             )
             display.show_error(f"Unknown agent type: {agent_type}")
             return None
+
+        # Prevent runaway agent spawning: cap active agents and dedupe near-identical tasks
+        active = self.agent_pool.active_count()
+        if active >= 4:
+            msg = (
+                f"Agent spawn skipped: {active} agents already active. "
+                "Wait for results or kill existing agents before spawning more."
+            )
+            display.show_warning(msg)
+            self.logger.info(msg)
+            return {
+                "agent_id": "N/A",
+                "status": "skipped",
+                "task": task,
+                "summary": msg,
+            }
+
+        task_norm = " ".join(task.lower().split())
+        for aid, info in self.agent_pool.get_status().items():
+            if info.get("status") in ("starting", "active"):
+                existing = " ".join((info.get("task") or "").lower().split())
+                if existing and (task_norm in existing or existing in task_norm):
+                    msg = (
+                        f"Agent spawn skipped: task overlaps with active agent {aid}. "
+                        "Use /agents to inspect running tasks."
+                    )
+                    display.show_warning(msg)
+                    self.logger.info(msg)
+                    return {
+                        "agent_id": aid,
+                        "status": "skipped",
+                        "task": task,
+                        "summary": msg,
+                    }
 
         count = self.agent_counter.get(agent_type, 0)
         self.agent_counter[agent_type] = count + 1
@@ -1404,7 +1442,7 @@ RESPONSE STYLE:
         )
 
         # Check with our local permission gate
-        allowed, reason = self.permission_gate.check(command)
+        allowed, reason = self.permission_gate.check(command, allow_prompt=False)
         self.agent_pool.respond_permission(agent_id, request_id, allowed, reason)
 
         if not allowed:
@@ -1889,6 +1927,12 @@ RESPONSE STYLE:
                 if self._campaign_mode:
                     self._save_campaign_state()
             self.agent_pool.shutdown(wait=bool(running))
+        except KeyboardInterrupt:
+            # Best-effort shutdown: avoid traceback on second Ctrl+C
+            try:
+                self.agent_pool.shutdown(wait=False)
+            except Exception:
+                pass
         except Exception:
             pass
         if self.browser:

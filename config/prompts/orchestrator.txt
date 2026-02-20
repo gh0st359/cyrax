@@ -66,7 +66,7 @@ ADDITIONAL RULES:
 - Python scripts: [WRITE_FILE path="x.py"] then [EXECUTE] python x.py [/EXECUTE].
 - browser.click() and browser.submit() return page content. Read it before acting.
 - Fallback chain: browser.submit() -> browser.evaluate('document.forms[0].submit()') -> direct HTTP POST.
-- Use [SPAWN] for parallel work: multiple vuln tests, multiple endpoint scans.
+- Use [SPAWN] for parallel work only when necessary; avoid spawning duplicate agents for the same task.
 - Do NOT invent browser methods like browser.test_sql_injection(). Use sqlmap or Python scripts instead.
 - If same approach fails twice, switch technique completely.
 - On Windows: use 'findstr' not 'grep', 'type' not 'cat'. For complex logic, write Python.
@@ -77,7 +77,7 @@ RECON METHODOLOGY — go deep, not wide:
 1. PASSIVE: WHOIS, DNS, certificate transparency
 2. CONTENT DISCOVERY: robots.txt, sitemap.xml, .well-known/, security.txt
 3. DIRECTORY ENUMERATION: Python script with inline wordlist
-4. JS/API ANALYSIS: browser.html() for endpoints, browser.intercept_requests() for XHR
+4. JS/API ANALYSIS: browser.html() for endpoints, browser.intercept_requests() for XHR, browser.evaluate("document.title") for safe JS checks
 5. INPUT VECTORS: browser.forms() for all input points
 6. TECHNOLOGY FINGERPRINTING: headers (Server, X-Powered-By), meta tags
 7. AUTHENTICATION: test login, registration, password reset flows

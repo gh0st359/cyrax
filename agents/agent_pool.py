@@ -617,16 +617,24 @@ class SubprocessAgentPool:
                 if agent.process and agent.process.poll() is not None:
                     exit_code = agent.process.returncode
                     if agent.status in ("starting", "active"):
-                        self._logger.warning(
-                            f"Agent {agent_id} process exited unexpectedly "
-                            f"(code {exit_code})"
-                        )
-                        agent.status = "failed"
+                        if exit_code == 0:
+                            self._logger.info(
+                                f"Agent {agent_id} exited cleanly without completion report"
+                            )
+                            agent.status = "completed"
+                            fallback_status = "completed"
+                        else:
+                            self._logger.warning(
+                                f"Agent {agent_id} process exited unexpectedly "
+                                f"(code {exit_code})"
+                            )
+                            agent.status = "failed"
+                            fallback_status = "failed"
                         if not agent.report:
                             agent.report = {
                                 "agent_id": agent_id,
                                 "task": agent.task,
-                                "status": "failed",
+                                "status": fallback_status,
                                 "iterations": agent.iteration,
                                 "summary": f"Process exited with code {exit_code}",
                                 "findings": [],
@@ -674,9 +682,13 @@ class SubprocessAgentPool:
         """Shut down the pool: kill all agents, close IPC, destroy tmux."""
         self._watchdog_running = False
 
-        if wait:
-            self.kill_all(graceful=True)
-        else:
+        try:
+            if wait:
+                self.kill_all(graceful=True)
+            else:
+                self.kill_all(graceful=False)
+        except KeyboardInterrupt:
+            # Force cleanup on repeated Ctrl+C without crashing the parent process
             self.kill_all(graceful=False)
 
         self._ipc.shutdown()
