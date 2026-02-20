@@ -5,6 +5,7 @@ and require user confirmation for dangerous actions.
 """
 
 import re
+import threading
 import ipaddress
 from typing import Optional
 from urllib.parse import urlparse
@@ -354,12 +355,13 @@ class PermissionGate:
         self.auto_approve = auto_approve
         self.session_approvals: dict[str, str] = {}  # Remembered decisions
         self.enabled = True
+        self._prompt_lock = threading.Lock()
 
     def classify_action(self, command: str) -> str:
         """Classify a command into an action category. Delegates to module-level function."""
         return classify_action(command)
 
-    def check(self, command: str) -> tuple[bool, str]:
+    def check(self, command: str, allow_prompt: bool = True) -> tuple[bool, str]:
         """
         Check if a command is permitted. Returns (allowed, reason).
         For 'ask' level, prompts the user interactively.
@@ -378,6 +380,11 @@ class PermissionGate:
             return False, f"Action type '{action_type}' is denied by policy."
 
         if level == "ask_first":
+            if not allow_prompt:
+                return False, (
+                    f"Action '{action_type}' requires confirmation. "
+                    "Use /approve <category> or /auto to pre-approve."
+                )
             # Prompt once per category, then auto-allow for the session
             allowed, reason = self._prompt_user(action_type, command)
             if allowed:
@@ -385,6 +392,11 @@ class PermissionGate:
             return allowed, reason
 
         # level == "ask" — prompt the user every time
+        if not allow_prompt:
+            return False, (
+                f"Action '{action_type}' requires confirmation. "
+                "Use /approve <category> or /auto to pre-approve."
+            )
         return self._prompt_user(action_type, command)
 
     def _prompt_user(self, action_type: str, command: str) -> tuple[bool, str]:
@@ -398,10 +410,11 @@ class PermissionGate:
         display.console.print(
             "  [Y] Allow  [N] Deny  [A] Allow all of this type  [D] Deny all of this type"
         )
-        try:
-            choice = display.console.input("[bold white]  > [/bold white]").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            return False, "User interrupted permission prompt."
+        with self._prompt_lock:
+            try:
+                choice = display.console.input("[bold white]  > [/bold white]").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return False, "User interrupted permission prompt."
 
         if choice in ("y", "yes"):
             return True, ""

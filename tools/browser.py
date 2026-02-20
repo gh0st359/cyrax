@@ -951,6 +951,40 @@ BROWSER_COMMANDS = {
 }
 
 
+
+
+
+def browser_command_has_shell_operators(command_str: str) -> bool:
+    """Return True if command mixes browser call with shell operators/pipes."""
+    cmd = command_str.strip()
+    return any(op in cmd for op in (" | ", " || ", " && ", " ; "))
+
+
+def validate_browser_command(method: str, args: list, kwargs: dict) -> Optional[str]:
+    """Validate parsed browser command against declared method signature."""
+    spec = BROWSER_COMMANDS.get(method)
+    if not spec:
+        return f"Unknown browser method: {method}"
+
+    required = spec.get("args", [])
+    optional = spec.get("optional", {})
+
+    if len(args) < len(required):
+        return (
+            f"browser.{method}() requires {len(required)} positional arg(s): "
+            f"{', '.join(required)}"
+        )
+
+    allowed_kwargs = set(optional.keys())
+    unexpected = sorted(k for k in kwargs.keys() if k not in allowed_kwargs)
+    if unexpected:
+        return (
+            f"browser.{method}() got unexpected keyword(s): {', '.join(unexpected)}. "
+            f"Allowed kwargs: {', '.join(sorted(allowed_kwargs)) or 'none'}"
+        )
+
+    return None
+
 def is_browser_command(command_str: str) -> bool:
     """Check if a command string looks like a browser command (browser.xxx(...))."""
     return bool(re.match(r"browser\.\w+\(", command_str.strip()))
