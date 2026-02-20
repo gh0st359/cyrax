@@ -19,3 +19,9 @@ def test_scope_enforcer_blocks_out_of_scope_command_targets():
     assert not allowed
     assert "NOT in your authorized scope" in reason
     assert "example.com" in reason
+
+
+def test_scope_enforcer_allows_www_alias_for_apex_domain():
+    scope = ScopeEnforcer(["kaidoagent.com"])
+
+    assert scope.is_in_scope("https://www.kaidoagent.com/mission")

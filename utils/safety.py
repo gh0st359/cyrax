@@ -98,6 +98,12 @@ class ScopeEnforcer:
         domain = domain.lower()
         if domain in self.allowed_domains:
             return True
+
+        # Common redirect alias handling: if scope includes apex domain,
+        # also allow the corresponding www host (example.com <-> www.example.com).
+        if domain.startswith("www.") and domain[4:] in self.allowed_domains:
+            return True
+
         # Check wildcard patterns (*.example.com matches sub.example.com)
         for wildcard_base in self.allowed_wildcard_domains:
             if domain.endswith("." + wildcard_base) or domain == wildcard_base:

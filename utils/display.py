@@ -90,12 +90,12 @@ def show_tool_output(agent_id: str, output: str, truncate: int = 2000):
 
 def show_agent_message(agent_id: str, message: str):
     """Display a message from an agent."""
-    console.print(f"\n[bold magenta]{agent_id}[/bold magenta]: {rich_escape(message)}")
+    console.print(f"[bold magenta]{agent_id}[/bold magenta]: {rich_escape(message)}")
 
 
 def show_cyrax_message(message: str):
     """Display a message from the main CYRAX orchestrator."""
-    console.print(f"\n[bold red]CYRAX[/bold red]: {rich_escape(message)}")
+    console.print(f"[bold red]CYRAX[/bold red]: {rich_escape(message)}")
 
 
 def show_spawning_agent(agent_id: str, agent_type: str, task: str):
@@ -216,7 +216,7 @@ def start_streaming(agent_id: str):
     global _streaming_buffer, _streaming_active
     _streaming_buffer = []
     _streaming_active = True
-    console.print(f"\n[bold red]{agent_id}[/bold red]: ", end="")
+    console.print(f"[bold red]{agent_id}[/bold red]: ", end="")
 
 
 def stream_token(token: str):
