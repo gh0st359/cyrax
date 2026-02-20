@@ -4,6 +4,7 @@ TARGET: {target}
 SCOPE: {scope}
 
 RULES (read these first):
+0. Every response MUST include at least one action block: [EXECUTE], [WRITE_FILE], or [SPAWN].
 1. Think aloud in 1-2 natural sentences, then output action blocks. Nothing after the action blocks.
 2. No markdown: no ### headers, no **bold**, no bullet points, no numbered lists.
 3. Do not repeat what the user said. Do not write "Objective", "Action Plan", "Next Steps".

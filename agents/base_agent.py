@@ -10,7 +10,14 @@ from typing import Optional, TYPE_CHECKING
 
 from memory.conversation import ConversationMemory
 from tools.tool_registry import ToolRegistry
-from tools.browser import BrowserManager, parse_browser_command, is_browser_command, BROWSER_COMMANDS
+from tools.browser import (
+    BrowserManager,
+    parse_browser_command,
+    is_browser_command,
+    BROWSER_COMMANDS,
+    validate_browser_command,
+    browser_command_has_shell_operators,
+)
 from tools.executor import sanitize_command
 from utils.logging import get_logger
 from utils import display
@@ -359,10 +366,29 @@ CORRECT — use browser.links() to discover actual paths:
                                 self.memory.add_message("user", f"[Tool Result]\n{result_msg}")
                                 continue
 
+                        if is_browser_command(command) and browser_command_has_shell_operators(command):
+                            result_msg = (
+                                "Error: Browser commands cannot be piped/chained with shell operators.\n"
+                                "Run browser commands in their own [EXECUTE] blocks, then process output in a separate shell command."
+                            )
+                            display.show_tool_output(self.agent_id, result_msg)
+                            self._record_failure(command)
+                            self.memory.add_message("user", f"[Tool Result]\n{result_msg}")
+                            continue
+
                         if (browser_parsed := parse_browser_command(command)):
                             # Scope check for browser.goto()
                             method_name = browser_parsed[0]
                             args = browser_parsed[1]
+                            kwargs = browser_parsed[2]
+
+                            sig_error = validate_browser_command(method_name, args, kwargs)
+                            if sig_error:
+                                result_msg = f"Error: {sig_error}"
+                                display.show_tool_output(self.agent_id, result_msg)
+                                self._record_failure(command)
+                                self.memory.add_message("user", f"[Tool Result]\n{result_msg}")
+                                continue
                             if method_name == "goto" and args and self.scope:
                                 allowed, reason = self.scope.check_browser_navigation(args[0])
                                 if not allowed:
