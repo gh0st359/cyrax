@@ -759,11 +759,12 @@ RESPONSE STYLE:
                         break
 
             if not action_results:
-                if depth == 0 and self._actions_executed_this_turn == 0:
-                    self.logger.info("No actions in response (reasoning-only turn)")
+                should_force_action = (depth == 0 and self._actions_executed_this_turn == 0) or self._is_planning_without_actions(current_response)
+                if should_force_action:
+                    self.logger.info("No actions in response (reasoning/planning-only turn)")
                     self.conversation.add_message(
                         "user",
-                        "[Action Feedback] Your response had zero action blocks and stalled the operation. "
+                        "[Action Feedback] Your response promised actions but executed none. "
                         "Reply with at least one immediate [EXECUTE], [WRITE_FILE], or [SPAWN] block now. "
                         "No plans, no markdown headings.",
                     )
@@ -991,6 +992,26 @@ RESPONSE STYLE:
             return "Approaches you haven't tried:\n" + "\n".join(f"  - {s}" for s in suggestions[:3])
         return "Write a Python script, use an alternative tool, or switch to a different attack vector."
 
+    def _is_planning_without_actions(self, text: str) -> bool:
+        """Detect planning/progressive language that promises actions without executing any."""
+        plan_patterns = (
+            r"\bnext\b",
+            r"\bi'll\b",
+            r"\bi will\b",
+            r"\bafter that\b",
+            r"\bnow i'll\b",
+            r"\bproceed(?:ing)? to\b",
+        )
+        lowered = text.lower()
+        return any(re.search(pattern, lowered) for pattern in plan_patterns)
+
+    def _available_tool_names(self) -> str:
+        """Return a compact, prompt-safe list of currently available tool names."""
+        available = [name for name, tool in sorted(self.tools.tools.items()) if tool.available]
+        if not available:
+            return "none detected"
+        return ", ".join(available[:25])
+
     def _execute_actions(self, response: str) -> list[str]:
         """
         Find and execute all action blocks in a response in document order.
@@ -1002,6 +1023,9 @@ RESPONSE STYLE:
         action_results = []
 
         for pos, action_type, match in actions:
+            if self._pause_requested:
+                action_results.append("[Action Feedback] Pause requested. Stopping after current completed actions.")
+                break
             self._actions_executed_this_turn += 1
 
             if action_type == "write_file":
@@ -1029,6 +1053,9 @@ RESPONSE STYLE:
                     continue
                 cmds = split_compound_commands(sanitized)
                 for command in cmds:
+                    if self._pause_requested:
+                        action_results.append("[Action Feedback] Pause requested. Stopping before executing additional commands.")
+                        break
                     command = command.strip()
                     if not command:
                         continue
@@ -1191,10 +1218,17 @@ RESPONSE STYLE:
                             self._cmds_succeeded_this_turn += 1
                         else:
                             guidance = _get_failure_guidance(command, result.output)
+                            missing_tool = ("not recognized as an internal or external command" in result.output.lower() or "command not found" in result.output.lower())
+                            tool_hint = ""
+                            if missing_tool:
+                                tool_hint = (
+                                    "\n[Tool Availability] That tool is not installed in this environment. "
+                                    f"Available tools include: {self._available_tool_names()}"
+                                )
                             action_results.append(
                                 f"[Tool Result for: {command}]\n"
                                 f"Exit code: {result.exit_code}\n"
-                                f"Output:\n{result.output}\n"
+                                f"Output:\n{result.output}{tool_hint}\n"
                                 f"NOTE: This command failed. Do NOT retry it. "
                                 f"Analyze the error and try a different approach.{guidance}"
                             )
