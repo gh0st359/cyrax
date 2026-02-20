@@ -20,6 +20,7 @@ import threading
 import asyncio
 import string
 import time
+import importlib.resources
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -52,7 +53,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from models.model_manager import ModelManager
 from tools.executor import ToolExecutor, split_compound_commands, sanitize_command
 from tools.tool_registry import ToolRegistry
-from tools.browser import BrowserManager, parse_browser_command, is_browser_command, BROWSER_COMMANDS
+from tools.browser import (
+    BrowserManager,
+    parse_browser_command,
+    is_browser_command,
+    BROWSER_COMMANDS,
+    validate_browser_command,
+    browser_command_has_shell_operators,
+)
 from memory.conversation import ConversationMemory
 from memory.knowledge_base import KnowledgeBase
 from memory.campaign_state import CampaignState
@@ -90,6 +98,25 @@ _ORCHESTRATOR_REQUIRED_PLACEHOLDERS = {
     "mission_context",
     "available_tools",
 }
+
+
+def _read_orchestrator_prompt_template() -> str:
+    """Read orchestrator prompt template from source tree or installed package data."""
+    # Dev/source-tree path (works when running from cloned repo)
+    if _ORCHESTRATOR_PROMPT_PATH.exists():
+        return _ORCHESTRATOR_PROMPT_PATH.read_text(encoding="utf-8")
+
+    # Installed package fallback (works for wheel/site-packages installs)
+    try:
+        packaged = importlib.resources.files("config").joinpath(
+            "prompts/orchestrator.txt"
+        )
+        return packaged.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to locate orchestrator prompt template. Checked source path "
+            f"{_ORCHESTRATOR_PROMPT_PATH} and package resource config/prompts/orchestrator.txt: {exc}"
+        ) from exc
 
 
 def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
@@ -254,7 +281,7 @@ class CyraxOrchestrator:
     def _load_orchestrator_prompt_template(self) -> str:
         """Load and validate the orchestrator operational prompt template."""
         try:
-            template = _ORCHESTRATOR_PROMPT_PATH.read_text(encoding="utf-8")
+            template = _read_orchestrator_prompt_template()
         except OSError as exc:
             raise RuntimeError(
                 f"Failed to read orchestrator prompt template at {_ORCHESTRATOR_PROMPT_PATH}: {exc}"
@@ -733,10 +760,22 @@ RESPONSE STYLE:
 
             if not action_results:
                 if depth == 0 and self._actions_executed_this_turn == 0:
-                    # Model produced only reasoning. That's ok — it will be
-                    # visible to the user. Let auto-continue handle the next turn
-                    # naturally instead of injecting a fake system nudge.
                     self.logger.info("No actions in response (reasoning-only turn)")
+                    self.conversation.add_message(
+                        "user",
+                        "[Action Feedback] Your response had zero action blocks and stalled the operation. "
+                        "Reply with at least one immediate [EXECUTE], [WRITE_FILE], or [SPAWN] block now. "
+                        "No plans, no markdown headings.",
+                    )
+                    try:
+                        followup = self._stream_response(self._build_system_prompt())
+                        self.conversation.add_message("assistant", followup)
+                        self.logger.log_conversation("assistant", followup)
+                        accumulated = f"{accumulated}\n\n{followup}"
+                        current_response = followup
+                        continue
+                    except Exception as e:
+                        self.logger.log_error("CYRAX", f"Recovery generation failed: {e}")
                 break
 
             # Feed results back to get follow-up
@@ -1013,10 +1052,29 @@ RESPONSE STYLE:
                         action_results.append(f"[Tool Result for: {command}]\n{blocked_msg}")
                         continue
 
+                    # Browser commands must not be chained with shell operators/pipes
+                    if is_browser_command(command) and browser_command_has_shell_operators(command):
+                        error_msg = (
+                            "Error: Browser commands cannot be piped/chained with shell operators.\n"
+                            "Run browser commands in their own [EXECUTE] blocks, then process output in a separate shell command."
+                        )
+                        display.show_tool_output("CYRAX", error_msg)
+                        action_results.append(f"[Tool Result for: {command}]\n{error_msg}")
+                        self._record_failure(command, error_msg)
+                        continue
+
                     # Scope check for browser navigation
                     browser_parsed = parse_browser_command(command)
                     if browser_parsed:
                         method_name, args, kwargs = browser_parsed
+
+                        sig_error = validate_browser_command(method_name, args, kwargs)
+                        if sig_error:
+                            msg = f"[Tool Result for: {command}]\nError: {sig_error}"
+                            display.show_tool_output("CYRAX", f"Error: {sig_error}")
+                            action_results.append(msg)
+                            self._record_failure(command, sig_error)
+                            continue
 
                         # Scope enforcement on browser.goto()
                         if method_name == "goto" and args:
