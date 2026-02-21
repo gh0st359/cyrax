@@ -5,7 +5,7 @@ Last updated: 2026-02-21
 | Milestone | Title | Status | Gate Report | Notes |
 |-----------|-------|--------|-------------|-------|
 | M00 | Release Control Plane | done | [M00.md](gates/M00.md) | Governance scaffolding |
-| M01 | Deterministic Environment | pending | — | Bootstrap & preflight |
+| M01 | Deterministic Environment | done | [M01.md](gates/M01.md) | Bootstrap & preflight |
 | M02 | Test and CI Hardening | pending | — | Markers, coverage, CI |
 | M03 | Critical Runtime Stabilization | pending | — | P0/P1 fixes |
 | M04 | Executor and Platform Robustness | pending | — | Shell hardening |
