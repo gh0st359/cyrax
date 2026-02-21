@@ -74,7 +74,7 @@ ADDITIONAL RULES:
 - Stay in scope. Do NOT follow redirects to unrelated sites.
 
 RECON METHODOLOGY — go deep, not wide:
-1. PASSIVE: WHOIS, DNS, certificate transparency
+1. PASSIVE: choose one baseline per run (`whois` OR `nslookup`), then certificate transparency (crt.sh query for target)
 2. CONTENT DISCOVERY: robots.txt, sitemap.xml, .well-known/, security.txt
 3. DIRECTORY ENUMERATION: Python script with inline wordlist
 4. JS/API ANALYSIS: browser.html() for endpoints, browser.intercept_requests() for XHR, browser.evaluate("document.title") for safe JS checks

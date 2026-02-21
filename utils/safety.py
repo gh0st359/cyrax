@@ -20,6 +20,7 @@ class ScopeEnforcer:
     """
 
     def __init__(self, targets: Optional[list[str]] = None):
+        self._passive_intel_hosts = {"crt.sh", "www.crt.sh"}
         self.allowed_domains: set[str] = set()
         self.allowed_wildcard_domains: list[str] = []
         self.allowed_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
@@ -146,8 +147,13 @@ class ScopeEnforcer:
         """Run scope extraction checks on arbitrary text."""
         urls = re.findall(r'https?://[^\s\'"]+', text)
         for url in urls:
+            parsed = urlparse(url)
+            if (
+                (parsed.hostname or "").lower() in self._passive_intel_hosts
+                and self._references_authorized_target(text)
+            ):
+                continue
             if not self.is_in_scope(url):
-                parsed = urlparse(url)
                 return False, (
                     f"'{parsed.hostname}' is NOT in your authorized scope. "
                     f"Your targets are: {', '.join(self._raw_targets)}"
@@ -171,6 +177,8 @@ class ScopeEnforcer:
                 domain = match.group(1).lower()
                 if domain.endswith(('.py', '.sh', '.txt', '.conf', '.log', '.xml', '.json', '.html')):
                     continue
+                if domain in self._passive_intel_hosts and self._references_authorized_target(text):
+                    continue
                 if not self.is_in_scope(domain):
                     return False, (
                         f"'{domain}' is NOT in your authorized scope. "
@@ -178,6 +186,23 @@ class ScopeEnforcer:
                     )
 
         return True, ""
+
+    def _references_authorized_target(self, text: str) -> bool:
+        """Return True when the text references any configured scope target."""
+        if not self._raw_targets:
+            return False
+
+        lowered = text.lower()
+        for raw_target in self._raw_targets:
+            token = raw_target.strip().lower()
+            if not token:
+                continue
+            if "://" in token:
+                token = urlparse(token).hostname or token
+            token = token.lstrip("*.")
+            if token and token in lowered:
+                return True
+        return False
 
     def _extract_wrapped_payloads(self, command: str) -> list[str]:
         """Extract command payloads from wrappers like bash -c, python -c, pwsh -Command."""
@@ -362,6 +387,7 @@ class PermissionGate:
         self.session_approvals: dict[str, str] = {}  # Remembered decisions
         self.enabled = True
         self._prompt_lock = threading.Lock()
+        self._interrupt_event = threading.Event()
 
     def classify_action(self, command: str) -> str:
         """Classify a command into an action category. Delegates to module-level function."""
@@ -374,6 +400,9 @@ class PermissionGate:
         """
         if not self.enabled or self.auto_approve:
             return True, ""
+
+        if self._interrupt_event.is_set():
+            return False, "Session interrupted. Command blocked."
 
         action_type = self.classify_action(command)
 
@@ -436,6 +465,14 @@ class PermissionGate:
     def is_prompt_active(self) -> bool:
         """Return True when a permission prompt is currently waiting for user input."""
         return self._prompt_lock.locked()
+
+    def set_interrupt(self):
+        """Block future prompts/commands until interrupt state is cleared."""
+        self._interrupt_event.set()
+
+    def clear_interrupt(self):
+        """Clear interrupt mode so permission checks can resume."""
+        self._interrupt_event.clear()
 
     def auto_approve_all(self):
         """Switch to fully autonomous mode (no prompts)."""

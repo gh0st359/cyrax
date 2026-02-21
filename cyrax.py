@@ -1490,6 +1490,16 @@ RESPONSE STYLE:
         command = request.get("command", "")
         request_id = request.get("request_id", "")
         action_type = request.get("action_type", "unknown")
+
+        if self._hard_interrupt_requested:
+            self.agent_pool.respond_permission(
+                agent_id,
+                request_id,
+                False,
+                "Session interrupted. Command blocked.",
+            )
+            return
+
         display.show_info(
             f"Agent {agent_id} requests permission [{action_type}]: {command[:100]}"
         )
@@ -1623,6 +1633,10 @@ RESPONSE STYLE:
         """Immediately interrupt current execution and stop background activity."""
         self._pause_requested = True
         self._hard_interrupt_requested = True
+        try:
+            self.permission_gate.set_interrupt()
+        except Exception:
+            pass
         try:
             self.tools.executor.interrupt_current()
         except Exception:
@@ -1937,6 +1951,10 @@ RESPONSE STYLE:
             # Run AI in background thread so Ctrl+C interrupts cleanly
             self._pause_requested = False
             self._hard_interrupt_requested = False
+            try:
+                self.permission_gate.clear_interrupt()
+            except Exception:
+                pass
             self._chat_result = None
             self._chat_error = None
             ai_thread = threading.Thread(

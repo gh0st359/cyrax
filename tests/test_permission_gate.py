@@ -52,3 +52,21 @@ def test_permission_gate_deny_blocks_without_prompt(monkeypatch):
     assert not allowed
     assert "denied by policy" in reason
     assert prompt_called["called"] is False
+
+
+def test_permission_gate_interrupt_blocks_checks_until_cleared(monkeypatch):
+    gate = PermissionGate(auto_approve=False)
+    monkeypatch.setattr(gate, "classify_action", lambda _cmd: "shell_command")
+
+    gate.set_interrupt()
+    blocked, reason = gate.check("nslookup kaidoagent.com")
+
+    assert not blocked
+    assert "Session interrupted" in reason
+
+    gate.clear_interrupt()
+
+    monkeypatch.setattr(gate, "_prompt_user", lambda *_args: (True, ""))
+    allowed, reason = gate.check("nslookup kaidoagent.com")
+    assert allowed
+    assert reason == ""
