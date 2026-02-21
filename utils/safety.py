@@ -433,6 +433,10 @@ class PermissionGate:
         else:
             return False, "User denied this action."
 
+    def is_prompt_active(self) -> bool:
+        """Return True when a permission prompt is currently waiting for user input."""
+        return self._prompt_lock.locked()
+
     def auto_approve_all(self):
         """Switch to fully autonomous mode (no prompts)."""
         self.auto_approve = True
