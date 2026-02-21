@@ -42,8 +42,9 @@ METHODOLOGY:
 
 OPERATIONAL GUIDELINES:
 - Always start passive before going active
-- For domain registration intel, use `whois <domain>` (NOT `nslookup -type=whois`)
+- For registration/DNS baseline, use either `whois <domain>` OR `nslookup <domain>` per run (never both in the same run)
 - For response headers / CDN / WAF hints, use `curl -I -L <url>`
+- For certificate transparency lookups, `https://crt.sh/?q=<target>` is allowed passive intel when querying the authorized target
 - Use browser.goto() and browser.content() for JS-heavy pages that curl can't render
 - Use browser.crawl() to spider web apps and discover hidden endpoints
 - Use browser.screenshot() to capture evidence of exposed dashboards/panels

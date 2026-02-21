@@ -25,3 +25,21 @@ def test_scope_enforcer_allows_www_alias_for_apex_domain():
     scope = ScopeEnforcer(["kaidoagent.com"])
 
     assert scope.is_in_scope("https://www.kaidoagent.com/mission")
+
+
+def test_scope_enforcer_allows_crt_sh_when_query_mentions_scoped_target():
+    scope = ScopeEnforcer(["kaidoagent.com"])
+
+    allowed, reason = scope.check_command("curl -s https://crt.sh/?q=kaidoagent.com")
+
+    assert allowed
+    assert reason == ""
+
+
+def test_scope_enforcer_blocks_crt_sh_when_query_does_not_match_scope():
+    scope = ScopeEnforcer(["kaidoagent.com"])
+
+    allowed, reason = scope.check_command("curl -s https://crt.sh/?q=evil.com")
+
+    assert not allowed
+    assert "NOT in your authorized scope" in reason
