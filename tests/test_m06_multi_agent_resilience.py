@@ -12,6 +12,7 @@ Tests cover:
 from __future__ import annotations
 
 import socket
+import sys
 import time
 
 import pytest
@@ -113,7 +114,8 @@ def test_zombie_count_reflects_unreported_exits():
     )
     try:
         # Inject a fake agent whose process has already exited but status is 'active'
-        dead_process = subprocess.Popen(["true"])  # exits immediately
+        # Use sys.executable for cross-platform compatibility (no 'true' on Windows)
+        dead_process = subprocess.Popen([sys.executable, "-c", ""])  # exits immediately
         dead_process.wait()  # ensure it's exited
 
         fake_agent = AgentProcess(

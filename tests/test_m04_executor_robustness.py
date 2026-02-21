@@ -9,10 +9,15 @@ Tests cover:
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from tools import executor as executor_module
 from tools.executor import ToolExecutor, _adapt_windows_commands, _resolve_interpreter
+
+# Cross-platform long-running command for timeout tests
+_SLEEP_CMD = f'"{sys.executable}" -c "import time; time.sleep(30)"'
 
 
 # ── Path traversal hardening ───────────────────────────────────────────────────
@@ -147,6 +152,6 @@ def test_resolve_interpreter_returns_preferred_when_unknown(monkeypatch):
 def test_timeout_does_not_hang(tmp_path):
     """A command that exceeds timeout must return promptly, not block forever."""
     executor = ToolExecutor(work_dir=str(tmp_path), timeout=1)
-    result = executor.execute("sleep 30", timeout=1)
+    result = executor.execute(_SLEEP_CMD, timeout=1)
     assert result.exit_code != 0
     assert "timed out" in result.output.lower() or result.exit_code == -1
