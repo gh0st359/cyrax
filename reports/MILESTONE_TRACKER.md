@@ -1,6 +1,6 @@
 # CYRAX Release Milestone Tracker
 
-Last updated: 2026-02-21 (M06 done)
+Last updated: 2026-02-21 (M08 done)
 
 | Milestone | Title | Status | Gate Report | Notes |
 |-----------|-------|--------|-------------|-------|
@@ -12,8 +12,8 @@ Last updated: 2026-02-21 (M06 done)
 | M05 | Browser and Tool Reliability | done | [M05.md](gates/M05.md) | Preflight, fallback |
 | M06 | Multi-Agent Resilience | done | [M06.md](gates/M06.md) | IPC, chaos tests |
 | M07 | Orchestrator Reliability | done | [M07.md](gates/M07.md) | Loop control |
-| M08 | Memory and Evidence Integrity | in_progress | — | Traceability, exports |
-| M09 | Safety and Governance Hardening | pending | — | Policy modes, audit |
+| M08 | Memory and Evidence Integrity | done | [M08.md](gates/M08.md) | Traceability, exports |
+| M09 | Safety and Governance Hardening | in_progress | — | Policy modes, audit |
 | M10 | Benchmark Harness | pending | — | Reproducible KPIs |
 | M11 | Productization | pending | — | Docs, runbook |
 | M12 | RC Soak and Launch Gate | pending | — | 72-hr soak, signoff |

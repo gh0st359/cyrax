@@ -1375,8 +1375,10 @@ RESPONSE STYLE:
                     target_url_host=self.campaign.target,
                 )
                 self.logger.log_finding("CYRAX", severity, title, details)
+                # DEF-M08-4: Let add_vuln() apply its own 200-char cap;
+                # previously we passed details[:100] which caused double-truncation.
                 self.mission.add_vuln(title, url=self.campaign.target,
-                                      evidence=details[:100])
+                                      evidence=details)
 
         return action_results
 
@@ -1885,13 +1887,21 @@ RESPONSE STYLE:
         return None
 
     def _export_findings(self):
-        """Export findings to a markdown report file."""
+        """Export findings to a markdown and JSON report file.
+
+        DEF-M08-2: Include the evidence field in exported reports.
+        DEF-M08-3: Also write cyrax_report.json for CI/XBOW integration.
+        """
+        import json as _json
         findings = self.knowledge.get_findings()
         if not findings:
             display.show_info("No findings to export.")
             return
 
         report_path = self.tools.executor.work_dir / "cyrax_report.md"
+        json_path = self.tools.executor.work_dir / "cyrax_report.json"
+
+        # ── Markdown export ──────────────────────────────────────────────────
         lines = [
             f"# CYRAX Security Assessment Report",
             f"",
@@ -1903,6 +1913,7 @@ RESPONSE STYLE:
             f"",
         ]
         for i, f in enumerate(findings, 1):
+            evidence_text = f.get("evidence", "") or ""
             lines.extend([
                 f"## {i}. [{f['severity'].upper()}] {f['title']}",
                 f"",
@@ -1914,13 +1925,33 @@ RESPONSE STYLE:
                 f"- Output Ref: {f.get('raw_output_ref', 'N/A') or 'N/A'}",
                 f"",
                 f"{f['description']}",
-                f"",
-                f"---",
-                f"",
             ])
+            if evidence_text:
+                lines.extend([
+                    f"",
+                    f"**Evidence:**",
+                    f"```",
+                    evidence_text,
+                    f"```",
+                ])
+            lines.extend([f"", f"---", f""])
 
-        report_path.write_text("\n".join(lines))
-        display.show_success(f"Report exported to {report_path}")
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+
+        # ── JSON export (DEF-M08-3) ──────────────────────────────────────────
+        json_report = {
+            "target": self.campaign.target or "",
+            "campaign": self._campaign_name or "",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "finding_count": len(findings),
+            "findings": findings,
+        }
+        json_path.write_text(
+            _json.dumps(json_report, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        display.show_success(f"Report exported: {report_path} and {json_path}")
 
     def _threaded_chat(self, user_input: str):
         """Run chat in a thread. Stores result/error for the main thread."""

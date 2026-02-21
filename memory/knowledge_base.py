@@ -219,6 +219,21 @@ class KnowledgeBase:
         """Get all stored hosts."""
         return [e["value"] for e in self.list_category("hosts")]
 
+    # DEF-M08-1: Canonical severity values — anything outside this set is
+    # normalized to the closest match or "info" to prevent inconsistent DB state.
+    _SEVERITY_ALIASES: dict[str, str] = {
+        "critical": "critical",
+        "crit": "critical",
+        "high": "high",
+        "med": "medium",
+        "medium": "medium",
+        "moderate": "medium",
+        "low": "low",
+        "info": "info",
+        "informational": "info",
+        "none": "info",
+    }
+
     def store_finding(
         self,
         title: str,
@@ -232,6 +247,10 @@ class KnowledgeBase:
         target_url_host: str = "",
     ):
         """Store a security finding in append-only findings storage."""
+        # DEF-M08-1: Normalize severity to canonical lowercase value so
+        # filtering/grouping by severity works reliably across all findings.
+        normalized = self._SEVERITY_ALIASES.get(severity.lower().strip(), "info")
+        severity = normalized
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """INSERT INTO findings (
