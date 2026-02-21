@@ -1,8 +1,11 @@
 import time
 
+import pytest
+
 from agents.ipc import IPCClient, IPCMessage, IPCServer
 
 
+@pytest.mark.unit
 def test_ipc_message_roundtrip_serialization():
     msg = IPCMessage("status", "AGENT-01", {"ok": True, "count": 2})
 
@@ -14,6 +17,7 @@ def test_ipc_message_roundtrip_serialization():
     assert restored.timestamp
 
 
+@pytest.mark.integration
 def test_ipc_client_can_reconnect_after_disconnect():
     received = []
 

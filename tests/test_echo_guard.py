@@ -1,9 +1,12 @@
 import unittest
 from types import SimpleNamespace
 
+import pytest
+
 from cyrax import CyraxOrchestrator
 
 
+@pytest.mark.unit
 class EchoGuardTests(unittest.TestCase):
     def _build_orchestrator(self):
         orch = CyraxOrchestrator.__new__(CyraxOrchestrator)

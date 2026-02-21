@@ -1,6 +1,9 @@
+import pytest
+
 from utils.safety import PermissionGate
 
 
+@pytest.mark.unit
 def test_permission_gate_ask_prompts_every_time(monkeypatch):
     gate = PermissionGate(auto_approve=False)
     calls = []
@@ -18,6 +21,7 @@ def test_permission_gate_ask_prompts_every_time(monkeypatch):
     assert len(calls) == 2
 
 
+@pytest.mark.unit
 def test_permission_gate_ask_first_prompts_once_then_allows(monkeypatch):
     gate = PermissionGate(auto_approve=False)
     calls = []
@@ -35,6 +39,7 @@ def test_permission_gate_ask_first_prompts_once_then_allows(monkeypatch):
     assert len(calls) == 1
 
 
+@pytest.mark.unit
 def test_permission_gate_deny_blocks_without_prompt(monkeypatch):
     gate = PermissionGate(auto_approve=False)
     monkeypatch.setattr(gate, "classify_action", lambda _cmd: "data_exfil")
@@ -54,6 +59,7 @@ def test_permission_gate_deny_blocks_without_prompt(monkeypatch):
     assert prompt_called["called"] is False
 
 
+@pytest.mark.unit
 def test_permission_gate_interrupt_blocks_checks_until_cleared(monkeypatch):
     gate = PermissionGate(auto_approve=False)
     monkeypatch.setattr(gate, "classify_action", lambda _cmd: "shell_command")

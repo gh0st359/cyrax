@@ -1,0 +1,71 @@
+name: CYRAX CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    name: "Test (Python ${{ matrix.python-version }} / ${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run preflight checks
+        run: python scripts/preflight.py
+
+      - name: Run unit tests
+        run: pytest tests/ -m "unit" -q --tb=short --timeout=60
+
+      - name: Run integration tests
+        run: pytest tests/ -m "integration" -q --tb=short --timeout=120
+
+      - name: Run all tests with coverage
+        run: |
+          pytest tests/ -q --tb=short --timeout=120 \
+            --cov=cyrax --cov=agents --cov=memory \
+            --cov=models --cov=tools --cov=utils --cov=ui \
+            --cov-report=term-missing \
+            --cov-fail-under=30
+
+  lint:
+    name: "Lint"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tools
+        run: pip install flake8
+
+      - name: Run flake8
+        run: |
+          flake8 . \
+            --max-line-length=120 \
+            --ignore=E501,W503,E203 \
+            --exclude=.git,__pycache__,*.egg-info,.venv \
+            --count --statistics
