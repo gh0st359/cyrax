@@ -11,8 +11,8 @@ Last updated: 2026-02-21 (M06 done)
 | M04 | Executor and Platform Robustness | done | [M04.md](gates/M04.md) | Shell hardening |
 | M05 | Browser and Tool Reliability | done | [M05.md](gates/M05.md) | Preflight, fallback |
 | M06 | Multi-Agent Resilience | done | [M06.md](gates/M06.md) | IPC, chaos tests |
-| M07 | Orchestrator Reliability | in_progress | — | Loop control |
-| M08 | Memory and Evidence Integrity | pending | — | Traceability, exports |
+| M07 | Orchestrator Reliability | done | [M07.md](gates/M07.md) | Loop control |
+| M08 | Memory and Evidence Integrity | in_progress | — | Traceability, exports |
 | M09 | Safety and Governance Hardening | pending | — | Policy modes, audit |
 | M10 | Benchmark Harness | pending | — | Reproducible KPIs |
 | M11 | Productization | pending | — | Docs, runbook |

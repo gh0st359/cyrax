@@ -144,6 +144,36 @@ def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
     return actions
 
 
+def _find_unclosed_tags(response: str) -> list[str]:
+    """
+    Detect action tags that were opened but never closed (malformed LLM output).
+
+    Returns a list of human-readable descriptions of unclosed tags so the
+    orchestrator can feed them back to the model as [Action Feedback].
+
+    DEF-M07-1: Without this, the model receives no signal that its action
+    syntax was broken — it thinks the command ran, but it silently did nothing.
+    """
+    unclosed = []
+    # Paired tags that require a closing counterpart
+    paired = [
+        ("EXECUTE", r'\[EXECUTE\]', r'\[/EXECUTE\]'),
+        ("WRITE_FILE", r'\[WRITE_FILE\b[^\]]*\]', r'\[/WRITE_FILE\]'),
+        ("SPAWN", r'\[SPAWN\b[^\]]*\]', r'\[/SPAWN\]'),
+        ("STORE", r'\[STORE\b[^\]]*\]', r'\[/STORE\]'),
+        ("FINDING", r'\[FINDING\b[^\]]*\]', r'\[/FINDING\]'),
+    ]
+    for tag_name, opener_pat, closer_pat in paired:
+        opens = len(re.findall(opener_pat, response))
+        closes = len(re.findall(closer_pat, response))
+        if opens > closes:
+            unclosed.append(
+                f"{tag_name} (opened {opens}x, closed {closes}x — "
+                f"missing [{'/'+tag_name}] closing tag)"
+            )
+    return unclosed
+
+
 def _get_failure_guidance(command: str, error: str) -> str:
     """Return specific guidance based on what went wrong."""
     err_lower = error.lower()
@@ -546,6 +576,9 @@ RESPONSE STYLE:
         self._actions_executed_this_turn = 0
         self._recent_cmds_this_turn = []
         self._cmds_succeeded_this_turn = 0
+        # DEF-M07-2: Reset cross-turn failure pattern counts so a command that
+        # failed against target A isn't blocked when retried against target B.
+        self._failed_pattern_counts = {}
 
         # Extract target from first user message if scope not yet configured
         if not self.scope.enabled:
@@ -796,9 +829,14 @@ RESPONSE STYLE:
                 self.logger.log_error("CYRAX", f"Follow-up generation failed: {e}")
                 break
         else:
-            # Hit max depth — just log it, don't inject system messages
+            # DEF-M07-4: Notify operator when depth limit is reached — previously
+            # this was logged silently, leaving the operator unaware the AI was spinning.
             self.logger.info(
                 f"Response processing depth limit reached ({self._max_response_depth})"
+            )
+            display.show_warning(
+                f"Response depth limit reached ({self._max_response_depth} iterations). "
+                "The AI may be in a reasoning loop. Type a message to redirect, or /pause to stop."
             )
 
         # Don't clear _consecutive_cmd_failures here — persist across the response loop
@@ -1024,6 +1062,17 @@ RESPONSE STYLE:
 
         actions = _find_all_actions(response)
         action_results = []
+
+        # DEF-M07-1: Detect and feed back unclosed/malformed action tags so the
+        # model knows its syntax was broken (otherwise it silently gets no results).
+        unclosed = _find_unclosed_tags(response)
+        if unclosed:
+            tag_list = "; ".join(unclosed)
+            action_results.append(
+                f"[Action Feedback] Malformed action tag(s) detected — these were NOT executed: "
+                f"{tag_list}. Each action tag must have a matching closing tag on its own line. "
+                f"Example: [EXECUTE]\\nnmap -sV target\\n[/EXECUTE]"
+            )
 
         for pos, action_type, match in actions:
             if self._pause_requested or self._hard_interrupt_requested:
@@ -2006,8 +2055,10 @@ RESPONSE STYLE:
 
             turn_count += 1
 
-            # Track actions for auto-continue
+            # Track actions for auto-continue (cap to last 50 to prevent unbounded growth)
             self._turn_action_counts.append(self._actions_executed_this_turn)
+            if len(self._turn_action_counts) > 50:
+                self._turn_action_counts = self._turn_action_counts[-50:]
             if self._actions_executed_this_turn == 0:
                 self._consecutive_empty_turns += 1
             else:
