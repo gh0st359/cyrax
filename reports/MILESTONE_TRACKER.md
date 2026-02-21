@@ -9,7 +9,7 @@ Last updated: 2026-02-21
 | M02 | Test and CI Hardening | done | [M02.md](gates/M02.md) | Markers, coverage, CI |
 | M03 | Critical Runtime Stabilization | done | [M03.md](gates/M03.md) | P0/P1 fixes |
 | M04 | Executor and Platform Robustness | done | [M04.md](gates/M04.md) | Shell hardening |
-| M05 | Browser and Tool Reliability | pending | — | Preflight, fallback |
+| M05 | Browser and Tool Reliability | done | [M05.md](gates/M05.md) | Preflight, fallback |
 | M06 | Multi-Agent Resilience | pending | — | IPC, chaos tests |
 | M07 | Orchestrator Reliability | pending | — | Loop control |
 | M08 | Memory and Evidence Integrity | pending | — | Traceability, exports |
