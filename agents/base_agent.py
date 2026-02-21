@@ -225,6 +225,8 @@ Browser commands: browser.goto(url), browser.back(), browser.refresh(),
   browser.evaluate("js"), browser.cookies(), browser.set_cookie(name, value, domain),
   browser.crawl(url, max_pages=30), browser.test_xss(url, param), browser.new_tab(url)
 These are the ONLY browser commands. Do NOT invent methods.
+If you need HTTP headers, use shell commands such as: [EXECUTE] curl -I -L https://target [/EXECUTE] (not browser.headers).
+For meta extraction in browser.evaluate(), use modern DOM APIs like querySelectorAll, never document.all.tags.
 
 Report a finding (with evidence):
 [FINDING severity="critical|high|medium|low|info" title="Title"]
@@ -245,6 +247,7 @@ RULES:
 - After navigating to a new page, check what's on it BEFORE trying to fill forms.
 - If a command fails, analyze the error and try a different approach. NEVER retry the same command.
 - Do NOT write plans, step lists, or "Next Steps" sections. ACT immediately.
+- NEVER say "next I'll ..." unless the same response also includes the [EXECUTE] action for that step.
 - On Windows: use 'findstr' not 'grep', 'type' not 'cat'. PowerShell syntax does NOT work in cmd.exe.
 - For complex logic, write a Python script — it works the same on all platforms.
 
