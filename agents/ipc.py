@@ -68,11 +68,19 @@ class IPCServer:
     via a background select()-based poll thread.
     """
 
-    def __init__(self, session_id: str, on_message: Callable[[IPCMessage], None]):
+    def __init__(
+        self,
+        session_id: str,
+        on_message: Callable[[IPCMessage], None],
+        on_disconnect: Optional[Callable[[str], None]] = None,
+    ):
         self.session_id = session_id
         self.socket_dir = Path(tempfile.gettempdir()) / f"cyrax-ipc-{session_id}"
         self.socket_dir.mkdir(parents=True, exist_ok=True)
         self._on_message = on_message
+        # Optional callback fired when an agent's TCP connection is dropped.
+        # Allows the agent pool watchdog to react sooner than the 5-second poll interval.
+        self._on_disconnect = on_disconnect
 
         self._server_sockets: dict[str, socket.socket] = {}   # agent_id -> listening socket
         self._agent_ports: dict[str, int] = {}                 # agent_id -> port
@@ -213,7 +221,12 @@ class IPCServer:
                         self._handle_disconnect(agent_id)
 
     def _handle_disconnect(self, agent_id: str):
-        """Handle agent disconnect."""
+        """Handle agent disconnect.
+
+        Closes the connection socket and fires the on_disconnect callback (if set)
+        so the agent pool watchdog can react immediately rather than waiting for the
+        next heartbeat check interval.
+        """
         with self._lock:
             conn = self._connections.pop(agent_id, None)
             if conn:
@@ -221,6 +234,13 @@ class IPCServer:
                     conn.close()
                 except OSError:
                     pass
+
+        # Fire disconnect callback outside the lock to avoid deadlock
+        if self._on_disconnect:
+            try:
+                self._on_disconnect(agent_id)
+            except Exception:
+                pass
 
     def close_agent(self, agent_id: str):
         """Close socket for a specific agent and clean up."""

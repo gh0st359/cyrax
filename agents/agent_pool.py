@@ -375,6 +375,25 @@ class SubprocessAgentPool:
                 if a.status in ("starting", "active")
             )
 
+    def zombie_count(self) -> int:
+        """Return the number of agent Popen objects that have exited but not been reaped.
+
+        A non-zero count indicates a resource leak in cleanup logic and is used
+        by chaos tests to verify correctness.
+        """
+        count = 0
+        with self._lock:
+            for agent in self._agents.values():
+                if agent.process is not None:
+                    try:
+                        rc = agent.process.poll()
+                        if rc is not None and agent.status in ("starting", "active"):
+                            # Process is dead but pool still thinks it's alive
+                            count += 1
+                    except Exception:
+                        pass
+        return count
+
     def wait_all(self, timeout: float = None) -> list[dict]:
         """Wait for all running agents to complete."""
         deadline = time.time() + timeout if timeout else None

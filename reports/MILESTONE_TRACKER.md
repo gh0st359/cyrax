@@ -1,6 +1,6 @@
 # CYRAX Release Milestone Tracker
 
-Last updated: 2026-02-21
+Last updated: 2026-02-21 (M06 done)
 
 | Milestone | Title | Status | Gate Report | Notes |
 |-----------|-------|--------|-------------|-------|
@@ -10,8 +10,8 @@ Last updated: 2026-02-21
 | M03 | Critical Runtime Stabilization | done | [M03.md](gates/M03.md) | P0/P1 fixes |
 | M04 | Executor and Platform Robustness | done | [M04.md](gates/M04.md) | Shell hardening |
 | M05 | Browser and Tool Reliability | done | [M05.md](gates/M05.md) | Preflight, fallback |
-| M06 | Multi-Agent Resilience | pending | — | IPC, chaos tests |
-| M07 | Orchestrator Reliability | pending | — | Loop control |
+| M06 | Multi-Agent Resilience | done | [M06.md](gates/M06.md) | IPC, chaos tests |
+| M07 | Orchestrator Reliability | in_progress | — | Loop control |
 | M08 | Memory and Evidence Integrity | pending | — | Traceability, exports |
 | M09 | Safety and Governance Hardening | pending | — | Policy modes, audit |
 | M10 | Benchmark Harness | pending | — | Reproducible KPIs |
