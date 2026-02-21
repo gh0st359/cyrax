@@ -107,11 +107,12 @@ class IPCPermissionGate:
             },
         ))
 
-        # Block waiting for response (60s timeout)
-        if not event.wait(timeout=60.0):
+        # Block waiting for response. Keep a long timeout so the operator has
+        # time to review/decide without sub-agents spuriously continuing.
+        if not event.wait(timeout=300.0):
             with self._lock:
                 self._pending.pop(request_id, None)
-            return False, "Permission request timed out (60s)."
+            return False, "Permission request timed out (300s)."
 
         with self._lock:
             self._pending.pop(request_id, None)

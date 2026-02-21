@@ -1440,9 +1440,19 @@ RESPONSE STYLE:
             "findings": [],
         }
 
+    def _permission_prompt_active(self) -> bool:
+        """Return True while the permission gate is actively prompting the user."""
+        checker = getattr(self.permission_gate, "is_prompt_active", None)
+        return bool(checker and checker())
+
     def receive_agent_update(self, agent_id: str, update: str):
         """Receive an interim update from a sub-agent."""
-        display.show_agent_message(agent_id, update)
+        if self._permission_prompt_active():
+            self.logger.log_event(
+                "agent_update_buffered", agent_id, {"update": update[:500]}
+            )
+        else:
+            display.show_agent_message(agent_id, update)
         self.logger.log_event(
             "agent_update", agent_id, {"update": update[:500]}
         )
@@ -1467,19 +1477,26 @@ RESPONSE STYLE:
 
     def _on_agent_report(self, agent_id: str, update: str):
         """Callback: agent sent a status report/update via IPC."""
-        display.show_agent_message(agent_id, update)
+        if self._permission_prompt_active():
+            self.logger.log_event(
+                "agent_report_buffered", agent_id, {"update": update[:500]}
+            )
+        else:
+            display.show_agent_message(agent_id, update)
         self.logger.log_event("agent_report", agent_id, {"update": update[:500]})
 
     def _on_agent_permission_request(self, agent_id: str, request: dict):
         """Callback: agent needs permission to execute a command."""
         command = request.get("command", "")
         request_id = request.get("request_id", "")
+        action_type = request.get("action_type", "unknown")
         display.show_info(
-            f"Agent {agent_id} requests permission: {command[:100]}"
+            f"Agent {agent_id} requests permission [{action_type}]: {command[:100]}"
         )
 
-        # Check with our local permission gate
-        allowed, reason = self.permission_gate.check(command, allow_prompt=False)
+        # Check with our local permission gate. Sub-agents should follow the
+        # same interactive permission workflow as orchestrator commands.
+        allowed, reason = self.permission_gate.check(command, allow_prompt=True)
         self.agent_pool.respond_permission(agent_id, request_id, allowed, reason)
 
         if not allowed:
