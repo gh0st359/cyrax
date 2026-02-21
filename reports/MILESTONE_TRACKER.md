@@ -1,6 +1,6 @@
 # CYRAX Release Milestone Tracker
 
-Last updated: 2026-02-21 (M10 done)
+Last updated: 2026-02-21 (M11 done)
 
 | Milestone | Title | Status | Gate Report | Notes |
 |-----------|-------|--------|-------------|-------|
@@ -15,8 +15,8 @@ Last updated: 2026-02-21 (M10 done)
 | M08 | Memory and Evidence Integrity | done | [M08.md](gates/M08.md) | Traceability, exports |
 | M09 | Safety and Governance Hardening | done | [M09.md](gates/M09.md) | Policy modes, audit |
 | M10 | Benchmark Harness | done | [M10.md](gates/M10.md) | Reproducible KPIs |
-| M11 | Productization | in_progress | — | Docs, runbook |
-| M12 | RC Soak and Launch Gate | pending | — | 72-hr soak, signoff |
+| M11 | Productization | done | [M11.md](gates/M11.md) | Docs, runbook |
+| M12 | RC Soak and Launch Gate | in_progress | — | 72-hr soak, signoff |
 
 ## Status Definitions
 - `pending` — not yet started
