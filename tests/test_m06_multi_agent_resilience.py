@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import socket
 import time
-import threading
-from types import SimpleNamespace
 
 import pytest
 

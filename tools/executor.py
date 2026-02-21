@@ -4,10 +4,9 @@ Executes shell commands and tools with proper sandboxing, timeout, and output ca
 """
 
 import os
-import sys
 import re
+import shutil as _shutil
 import subprocess
-import shlex
 import signal
 import tempfile
 import textwrap
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from utils.logging import get_logger
-from utils.platform_info import IS_WINDOWS, get_default_work_dir, get_shell_name
+from utils.platform_info import IS_WINDOWS, get_default_work_dir
 from utils.safety import ScopeEnforcer
 
 
@@ -45,9 +44,6 @@ def _normalize_python_cmd(cmd: str) -> str:
         if cmd.startswith("python3."):
             return cmd  # Leave python3.11 etc. alone
     return cmd
-
-
-import shutil as _shutil
 
 
 def _resolve_interpreter(preferred: str) -> str:
@@ -231,9 +227,11 @@ def _unflatten_python(code: str) -> str:
     # Step 3: Build indented output
     lines = []
     indent = 0
-    _BLOCK_OPENERS = ("for ", "while ", "if ", "elif ", "else:", "try:",
-                       "except ", "except:", "with ", "def ", "class ",
-                       "finally:", "async ")
+    _BLOCK_OPENERS = (
+        "for ", "while ", "if ", "elif ", "else:", "try:",
+        "except ", "except:", "with ", "def ", "class ",
+        "finally:", "async "
+    )
     _DEDENT_KEYWORDS = ("except ", "except:", "elif ", "else:", "finally:")
 
     for part in parts:

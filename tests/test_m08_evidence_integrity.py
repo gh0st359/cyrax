@@ -12,8 +12,6 @@ Tests cover:
 from __future__ import annotations
 
 import json
-import sqlite3
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -128,7 +126,7 @@ def test_export_findings_includes_evidence_in_markdown(tmp_path):
     obj.tools.executor.work_dir = work_dir
 
     # Patch display.show_success to avoid side effects
-    with patch("cyrax.display") as mock_display:
+    with patch("cyrax.display"):
         obj._export_findings()
 
     md_text = (work_dir / "cyrax_report.md").read_text(encoding="utf-8")

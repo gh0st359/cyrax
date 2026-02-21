@@ -5,7 +5,6 @@ Uses JSON file-backed storage (no external DB dependency).
 """
 
 import json
-import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone

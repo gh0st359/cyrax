@@ -4,18 +4,14 @@ Provides a full interactive terminal with always-available input,
 concurrent AI output streaming, and slash commands during execution.
 """
 
-import asyncio
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 try:
     from textual.app import App, ComposeResult
     from textual.widgets import Header, Footer, RichLog, Input, Static
-    from textual.containers import Vertical
     from textual.binding import Binding
     from textual import work
     from rich.panel import Panel
-    from rich.syntax import Syntax
-    from rich.markdown import Markdown
     from rich import box
     HAS_TEXTUAL = True
 except ImportError:

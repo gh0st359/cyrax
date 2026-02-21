@@ -21,11 +21,9 @@ import pytest
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
-from release_check import (
+from release_check import (  # noqa: E402
     check_pyproject_metadata,
     check_version_format,
-    check_gate_reports,
-    check_milestones,
     run_release_check,
 )
 

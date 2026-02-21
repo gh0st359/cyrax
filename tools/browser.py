@@ -3,14 +3,11 @@ CYRAX Browser Automation Module
 Playwright-based browser control for web interaction, crawling, and exploitation.
 """
 
-import base64
 import json
 import re
-import os
-import tempfile
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 from utils.logging import get_logger
 
@@ -734,7 +731,7 @@ class BrowserManager:
                 self._page.goto(url, wait_until="domcontentloaded")
             return BrowserResult(
                 action="new_tab", success=True,
-                data=f"New tab opened" + (f": {url}" if url else ""),
+                data="New tab opened" + (f": {url}" if url else ""),
                 url=self._page.url if url else "",
             )
         except Exception as e:
@@ -1009,9 +1006,6 @@ BROWSER_COMMANDS = {
 }
 
 
-
-
-
 def browser_command_has_shell_operators(command_str: str) -> bool:
     """Return True if command mixes browser call with shell operators/pipes."""
     cmd = command_str.strip()
@@ -1042,6 +1036,7 @@ def validate_browser_command(method: str, args: list, kwargs: dict) -> Optional[
         )
 
     return None
+
 
 def is_browser_command(command_str: str) -> bool:
     """Check if a command string looks like a browser command (browser.xxx(...))."""

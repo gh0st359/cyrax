@@ -3,7 +3,6 @@ CYRAX API Model Providers
 Clients for OpenAI, Anthropic, Google, xAI, and custom API endpoints.
 """
 
-import json
 from abc import ABC, abstractmethod
 from typing import Optional
 
@@ -114,7 +113,6 @@ class OpenAIClient(BaseModelClient):
             logger.log_error("model", f"OpenAI API error: {e}")
             raise
 
-
     def generate_stream(
         self,
         system: str,
@@ -214,7 +212,6 @@ class AnthropicClient(BaseModelClient):
         except Exception as e:
             logger.log_error("model", f"Anthropic API error: {e}")
             raise
-
 
     def generate_stream(
         self,

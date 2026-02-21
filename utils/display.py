@@ -12,11 +12,8 @@ from rich.table import Table
 from rich.text import Text
 from rich.live import Live
 from rich.spinner import Spinner
-from rich.columns import Columns
-from rich.rule import Rule
 from rich import box
 import re
-from typing import Optional
 
 
 console = Console()
@@ -221,7 +218,6 @@ def start_streaming(agent_id: str):
 
 def stream_token(token: str):
     """Display a single streamed token in real-time."""
-    global _streaming_buffer
     if not _streaming_active:
         return
     _streaming_buffer.append(token)

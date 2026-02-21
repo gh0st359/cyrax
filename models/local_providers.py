@@ -4,7 +4,6 @@ Clients for Ollama, LM Studio, and other locally-hosted models.
 """
 
 import json
-from typing import Optional
 
 import httpx
 

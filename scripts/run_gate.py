@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -236,7 +235,7 @@ P1 count: {sum(1 for d in report['defects'] if d['severity'] == 'P1')}
     with open(md_path, "w") as f:
         f.write(md)
 
-    print(f"\nGate artifacts written:")
+    print("\nGate artifacts written:")
     print(f"  {json_path}")
     print(f"  {md_path}")
 

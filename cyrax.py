@@ -17,7 +17,6 @@ import argparse
 import hashlib
 import difflib
 import threading
-import asyncio
 import string
 import time
 import importlib.resources
@@ -45,15 +44,15 @@ if _missing:
     print(f"    Run: {sys.executable} -m pip install -r requirements.txt\n")
     sys.exit(1)
 
-import yaml
+import yaml  # noqa: E402
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from models.model_manager import ModelManager
-from tools.executor import ToolExecutor, split_compound_commands, sanitize_command
-from tools.tool_registry import ToolRegistry
-from tools.browser import (
+from models.model_manager import ModelManager  # noqa: E402
+from tools.executor import ToolExecutor, split_compound_commands, sanitize_command  # noqa: E402
+from tools.tool_registry import ToolRegistry  # noqa: E402
+from tools.browser import (  # noqa: E402
     BrowserManager,
     parse_browser_command,
     is_browser_command,
@@ -61,23 +60,23 @@ from tools.browser import (
     validate_browser_command,
     browser_command_has_shell_operators,
 )
-from memory.conversation import ConversationMemory
-from memory.knowledge_base import KnowledgeBase
-from memory.campaign_state import CampaignState
-from memory.mission_memory import MissionMemory
-from agents.base_agent import BaseAgent
-from agents.recon_agent import ReconAgent
-from agents.exploit_agent import ExploitAgent
-from agents.post_exploit_agent import PostExploitAgent
-from agents.ad_agent import ActiveDirectoryAgent
-from agents.web_agent import WebAgent
-from agents.cloud_agent import CloudAgent
-from agents.osint_agent import OSINTAgent
-from utils import display
-from utils.logging import init_logger, get_logger
-from utils.platform_info import get_platform_context, get_default_work_dir
-from utils.safety import ScopeEnforcer, PermissionGate
-from agents.agent_pool import SubprocessAgentPool
+from memory.conversation import ConversationMemory  # noqa: E402
+from memory.knowledge_base import KnowledgeBase  # noqa: E402
+from memory.campaign_state import CampaignState  # noqa: E402
+from memory.mission_memory import MissionMemory  # noqa: E402
+from agents.base_agent import BaseAgent  # noqa: E402
+from agents.recon_agent import ReconAgent  # noqa: E402
+from agents.exploit_agent import ExploitAgent  # noqa: E402
+from agents.post_exploit_agent import PostExploitAgent  # noqa: E402
+from agents.ad_agent import ActiveDirectoryAgent  # noqa: E402
+from agents.web_agent import WebAgent  # noqa: E402
+from agents.cloud_agent import CloudAgent  # noqa: E402
+from agents.osint_agent import OSINTAgent  # noqa: E402
+from utils import display  # noqa: E402
+from utils.logging import init_logger  # noqa: E402
+from utils.platform_info import get_platform_context, get_default_work_dir  # noqa: E402
+from utils.safety import ScopeEnforcer, PermissionGate  # noqa: E402
+from agents.agent_pool import SubprocessAgentPool  # noqa: E402
 
 
 AGENT_CLASSES = {
@@ -418,7 +417,6 @@ class CyraxOrchestrator:
         conv_file = self._campaign_dir / "conversation.json"
         conv_file.write_text(self.conversation.to_json())
 
-
     def _mark_agents_orphaned_if_active(self):
         """Mark active agents as orphaned before persisting/exit."""
         if self.agent_pool.get_running():
@@ -686,8 +684,6 @@ RESPONSE STYLE:
         Process CYRAX's response for embedded actions iteratively.
         Each loop: extract actions, execute, get follow-up, repeat.
         """
-        from tools.executor import strip_markdown_fences
-
         accumulated = response
         current_response = response
         seen_hashes_this_turn: set[str] = set()
@@ -1927,38 +1923,38 @@ RESPONSE STYLE:
 
         # ── Markdown export ──────────────────────────────────────────────────
         lines = [
-            f"# CYRAX Security Assessment Report",
-            f"",
+            "# CYRAX Security Assessment Report",
+            "",
             f"**Target:** {self.campaign.target or 'N/A'}",
             f"**Campaign:** {self._campaign_name or 'N/A'}",
             f"**Findings:** {len(findings)}",
-            f"",
-            f"---",
-            f"",
+            "",
+            "---",
+            "",
         ]
         for i, f in enumerate(findings, 1):
             evidence_text = f.get("evidence", "") or ""
             lines.extend([
                 f"## {i}. [{f['severity'].upper()}] {f['title']}",
-                f"",
+                "",
                 f"- ID: {f.get('id', 'N/A')}",
                 f"- Timestamp: {f.get('stored_at', 'N/A')}",
                 f"- Agent: {f.get('agent_id', 'N/A') or 'N/A'}",
                 f"- Target: {f.get('target_url_host', f.get('target', 'N/A')) or 'N/A'}",
                 f"- Command/Action ID: {f.get('command_action_id', 'N/A') or 'N/A'}",
                 f"- Output Ref: {f.get('raw_output_ref', 'N/A') or 'N/A'}",
-                f"",
-                f"{f['description']}",
+                "",
+                f['description'],
             ])
             if evidence_text:
                 lines.extend([
-                    f"",
-                    f"**Evidence:**",
-                    f"```",
+                    "",
+                    "**Evidence:**",
+                    "```",
                     evidence_text,
-                    f"```",
+                    "```",
                 ])
-            lines.extend([f"", f"---", f""])
+            lines.extend(["", "---", ""])
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
 

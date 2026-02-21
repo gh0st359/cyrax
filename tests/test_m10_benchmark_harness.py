@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from benchmark import run_benchmarks, _THRESHOLDS
+from benchmark import run_benchmarks, _THRESHOLDS  # noqa: E402
 
 
 # ── Required KPI keys ─────────────────────────────────────────────────────────

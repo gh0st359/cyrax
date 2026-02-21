@@ -9,12 +9,8 @@ DEF-M03-5  intercept_requests: url_pattern actually filters captured requests
 """
 from __future__ import annotations
 
-import inspect
 import logging
-import sys
-import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -95,7 +91,7 @@ def test_action_count_not_incremented_for_empty_execute(tmp_path):
         execute_raw=lambda _cmd: CommandResult("cmd", "ok", "", 0),
     )
 
-    results = orch._execute_actions("[EXECUTE][/EXECUTE]")
+    orch._execute_actions("[EXECUTE][/EXECUTE]")
 
     assert orch._actions_executed_this_turn == 0, (
         "Empty EXECUTE block must not increment _actions_executed_this_turn"
@@ -196,7 +192,6 @@ def test_permission_gate_interactive_still_prompts(monkeypatch):
 @pytest.mark.unit
 def test_intercept_requests_filters_by_url_pattern():
     """intercept_requests must only capture URLs matching the given pattern."""
-    from tools.browser import BrowserManager
     import fnmatch
 
     # Test the filtering logic directly without a live browser

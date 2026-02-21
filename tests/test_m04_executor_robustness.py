@@ -9,12 +9,6 @@ Tests cover:
 """
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from tools import executor as executor_module

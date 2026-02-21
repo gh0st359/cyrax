@@ -5,7 +5,6 @@ Foundation class for all specialized sub-agents.
 
 import os
 import re
-import json
 from typing import Optional, TYPE_CHECKING
 
 from memory.conversation import ConversationMemory

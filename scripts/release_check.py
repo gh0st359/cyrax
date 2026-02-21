@@ -23,7 +23,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
@@ -192,7 +191,6 @@ def main():
     )
 
     for name, passed, detail in results:
-        icon = "✓" if passed else "✗"
         status = "PASS" if passed else "FAIL"
         print(f"  [{status}] {name}: {detail}")
 

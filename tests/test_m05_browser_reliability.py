@@ -10,17 +10,13 @@ Tests cover:
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
-from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from tools.browser import (
     BrowserManager,
     BrowserResult,
-    BROWSER_COMMANDS,
-    parse_browser_command,
     parse_browser_command_with_error,
     validate_browser_command,
     is_browser_command,

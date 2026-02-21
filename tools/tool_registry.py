@@ -3,7 +3,6 @@ CYRAX Tool Registry
 Catalog of available pentesting tools with metadata and execution wrappers.
 """
 
-import shlex
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 

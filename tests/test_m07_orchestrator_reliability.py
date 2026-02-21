@@ -11,13 +11,11 @@ Tests cover:
 """
 from __future__ import annotations
 
-import re
-import sys
-import types
+from unittest.mock import MagicMock
+
 import pytest
 
 # Import the module-level helpers directly (they're not class methods)
-import importlib
 import cyrax as _cyrax_module
 
 _find_all_actions = _cyrax_module._find_all_actions
@@ -128,8 +126,6 @@ def test_execute_actions_feeds_back_unclosed_tag(tmp_path, monkeypatch):
     When response has an unclosed [EXECUTE] tag, _execute_actions must return
     an [Action Feedback] message — not an empty list.
     """
-    from unittest.mock import MagicMock, patch
-
     # Build a minimal Cyrax instance without full init
     obj = object.__new__(_cyrax_module.CyraxOrchestrator)
     obj._pause_requested = False
@@ -170,8 +166,6 @@ def test_failed_pattern_counts_reset_per_turn(tmp_path, monkeypatch):
     DEF-M07-2: After a new user message is processed, _failed_pattern_counts
     must start empty so commands that failed in a previous turn aren't blocked.
     """
-    from unittest.mock import MagicMock, patch
-
     obj = object.__new__(_cyrax_module.CyraxOrchestrator)
     # Simulate state after previous turn where nmap failed 3 times
     obj._failed_pattern_counts = {"nmap:target": 3}
@@ -227,7 +221,6 @@ def test_depth_limit_warning_is_emitted(monkeypatch):
     must be called (operator notification — not silent log-only).
     """
     from utils import display as _display
-    from unittest.mock import MagicMock, patch
 
     warnings_shown = []
     monkeypatch.setattr(_display, "show_warning", lambda msg: warnings_shown.append(msg))
