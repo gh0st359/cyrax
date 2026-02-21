@@ -47,6 +47,41 @@ def _normalize_python_cmd(cmd: str) -> str:
     return cmd
 
 
+import shutil as _shutil
+
+
+def _resolve_interpreter(preferred: str) -> str:
+    """Resolve an interpreter name to the first available binary in PATH.
+
+    Falls back through a candidate list when the preferred interpreter is not
+    installed.  Returns the preferred name unchanged if no candidate is found
+    so the executor can report a meaningful 'command not found' error.
+
+    Fallback chains:
+      bash  -> sh
+      sh    -> bash
+      python3 -> python
+      python  -> python3
+    """
+    if _shutil.which(preferred):
+        return preferred
+
+    fallbacks: dict[str, list[str]] = {
+        "bash": ["sh", "dash"],
+        "sh": ["bash", "dash"],
+        "python3": ["python", "python3.11", "python3.10"],
+        "python": ["python3", "python3.11", "python3.10"],
+    }
+
+    for candidate in fallbacks.get(preferred, []):
+        if _shutil.which(candidate):
+            logger = get_logger()
+            logger.info(f"Interpreter '{preferred}' not found — using fallback '{candidate}'")
+            return candidate
+
+    return preferred  # Let execute() surface a clear 'not found' error
+
+
 def _adapt_windows_unix_filters(command: str) -> str:
     """
     Adapt common Unix text-filter usage for Windows cmd.exe.
@@ -80,6 +115,51 @@ def _adapt_windows_unix_filters(command: str) -> str:
         return "| findstr " + " ".join(findstr_flags)
 
     return grep_pipe_pattern.sub(_replace_grep, command)
+
+
+def _adapt_windows_commands(command: str) -> str:
+    """
+    Adapt common Unix command-line tools that are absent on stock Windows.
+
+    Handles standalone commands (not pipes):
+      cat <file>   -> type <file>
+      ls           -> dir /B
+      ls -la       -> dir
+      head -n N    -> (first N lines via more.com)
+      rm <file>    -> del <file>
+      cp <src> <d> -> copy <src> <d>
+      mv <src> <d> -> move <src> <d>
+      mkdir -p     -> md (idempotent create)
+      clear        -> cls
+
+    Only applied on Windows.  Shell pipelines are left to _adapt_windows_unix_filters.
+    """
+    if not IS_WINDOWS:
+        return command
+
+    # cat <file> -> type <file>  (only when no pipe follows on the same segment)
+    command = re.sub(r'\bcat\b\s+(?!\|)', 'type ', command, flags=re.IGNORECASE)
+
+    # ls flags
+    command = re.sub(r'\bls\s+-la?\b', 'dir', command, flags=re.IGNORECASE)
+    command = re.sub(r'\bls\b(?!\s*-)', 'dir /B', command, flags=re.IGNORECASE)
+
+    # rm -rf / rm -f -> rd /s /q  (directory) or del /f /q (file)
+    command = re.sub(r'\brm\s+-rf?\b', 'rd /s /q', command, flags=re.IGNORECASE)
+    command = re.sub(r'\brm\s+-f\b', 'del /f /q', command, flags=re.IGNORECASE)
+    command = re.sub(r'\brm\b', 'del', command, flags=re.IGNORECASE)
+
+    # cp / mv
+    command = re.sub(r'\bcp\b', 'copy', command, flags=re.IGNORECASE)
+    command = re.sub(r'\bmv\b', 'move', command, flags=re.IGNORECASE)
+
+    # mkdir -p -> md (cmd.exe md is idempotent for existing dirs)
+    command = re.sub(r'\bmkdir\s+-p\b', 'md', command, flags=re.IGNORECASE)
+
+    # clear -> cls
+    command = re.sub(r'^\s*clear\s*$', 'cls', command, flags=re.IGNORECASE)
+
+    return command
 
 
 def _extract_python_c_code(command: str) -> Optional[str]:
@@ -521,8 +601,27 @@ class ToolExecutor:
         return (self.work_dir / user_path).resolve()
 
     def _validate_user_path(self, action: str, user_path: str) -> tuple[Optional[Path], Optional[CommandResult]]:
-        """Ensure resolved paths stay within the configured work directory."""
+        """Ensure resolved paths stay within the configured work directory.
+
+        Additional defences:
+        - Null bytes in path strings (classic C-library bypass).
+        - URL-encoded dot sequences (%2e, %2e%2e) that could fool naive checks.
+        """
         logger = get_logger()
+
+        # Reject null bytes — can truncate path strings in underlying C calls.
+        if "\x00" in user_path:
+            msg = f"Rejected path containing null byte: requested='{user_path!r}'"
+            logger.log_error("executor", msg)
+            return None, CommandResult(f"{action}({user_path!r})", "", msg, 1)
+
+        # Reject URL-encoded dot sequences that decode to traversal patterns.
+        normalized = user_path.replace("%2e", ".").replace("%2E", ".")
+        if ".." in normalized and normalized != user_path:
+            msg = f"Rejected URL-encoded path traversal: requested='{user_path}'"
+            logger.log_error("executor", msg)
+            return None, CommandResult(f"{action}({user_path})", "", msg, 1)
+
         work_dir_resolved = self.work_dir.resolve()
         resolved_path = self._resolve_user_path(user_path)
 
@@ -563,8 +662,9 @@ class ToolExecutor:
         # Normalize python3 -> python on Windows
         command = _normalize_python_cmd(command)
 
-        # Windows compatibility shim for common Unix filters.
+        # Windows compatibility shims: filters (grep→findstr) and standalone commands
         command = _adapt_windows_unix_filters(command)
+        command = _adapt_windows_commands(command)
 
         # Handle python -c code that can't run inline:
         # - Multi-line code (Windows CMD can't handle newlines in -c args)
@@ -638,13 +738,26 @@ class ToolExecutor:
                 stdout, stderr = process.communicate(timeout=exec_timeout)
                 exit_code = process.returncode
             except subprocess.TimeoutExpired:
-                # Kill the process tree
-                if IS_WINDOWS:
-                    process.kill()
-                else:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                process.wait()
-                stdout, stderr = b"", b"Command timed out"
+                # Kill the process tree — bounded wait to prevent zombie leaks.
+                try:
+                    if IS_WINDOWS:
+                        process.kill()
+                    else:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass  # Process already gone
+                try:
+                    # Wait up to 10 s for the process to actually exit.
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass  # Zombie — cannot be reaped; proceed anyway
+                # Drain any buffered output so pipes don't block caller
+                try:
+                    stdout = process.stdout.read() if process.stdout else b""
+                    stderr = process.stderr.read() if process.stderr else b""
+                except Exception:
+                    stdout, stderr = b"", b""
+                stderr = (stderr or b"") + b"\nCommand timed out"
                 exit_code = -1
             finally:
                 self._active_process = None
@@ -695,6 +808,9 @@ class ToolExecutor:
         """
         if not interpreter:
             interpreter = "python" if IS_WINDOWS else "bash"
+
+        # Resolve interpreter with fallback (e.g. bash -> sh when bash absent)
+        interpreter = _resolve_interpreter(interpreter)
 
         if self.scope_enforcer and self.scope_enforcer.enabled:
             scope_ok, scope_reason = self.scope_enforcer.check_command(script_content)

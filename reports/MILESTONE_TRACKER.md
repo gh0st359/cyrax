@@ -8,7 +8,7 @@ Last updated: 2026-02-21
 | M01 | Deterministic Environment | done | [M01.md](gates/M01.md) | Bootstrap & preflight |
 | M02 | Test and CI Hardening | done | [M02.md](gates/M02.md) | Markers, coverage, CI |
 | M03 | Critical Runtime Stabilization | done | [M03.md](gates/M03.md) | P0/P1 fixes |
-| M04 | Executor and Platform Robustness | pending | — | Shell hardening |
+| M04 | Executor and Platform Robustness | done | [M04.md](gates/M04.md) | Shell hardening |
 | M05 | Browser and Tool Reliability | pending | — | Preflight, fallback |
 | M06 | Multi-Agent Resilience | pending | — | IPC, chaos tests |
 | M07 | Orchestrator Reliability | pending | — | Loop control |
