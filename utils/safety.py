@@ -495,3 +495,19 @@ class PermissionGate:
         """Pre-approve a category of actions."""
         if category in self.ACTIONS:
             self.session_approvals[category] = "allow"
+
+    @property
+    def policy_mode(self) -> str:
+        """DEF-M09-2: Observable policy mode string for audit logs and diagnostics.
+
+        Returns:
+            "auto"        — auto_approve is True; no prompts, all actions allowed
+            "interactive" — TTY is available; user can be prompted
+            "ci"          — non-interactive (no TTY); dangerous actions auto-denied
+        """
+        import sys
+        if self.auto_approve:
+            return "auto"
+        if sys.stdin.isatty():
+            return "interactive"
+        return "ci"

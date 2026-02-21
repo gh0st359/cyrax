@@ -1165,6 +1165,12 @@ RESPONSE STYLE:
                                 scope_msg = f"[Scope Violation] {reason}"
                                 display.show_tool_output("CYRAX", scope_msg)
                                 action_results.append(f"[Tool Result for: {command}]\n{scope_msg}")
+                                # DEF-M09-1: Persist scope violations to JSONL audit trail
+                                self.logger.log_event("scope_violation", "CYRAX", {
+                                    "command": command[:200],
+                                    "reason": reason,
+                                    "action_type": "browser_navigate",
+                                })
                                 continue
 
                         # Permission gate for attack payloads
@@ -1176,6 +1182,12 @@ RESPONSE STYLE:
                                 f"[Tool Result for: {command}]\n{perm_msg}\n"
                                 "The user declined this action. Try a different approach or ask for guidance."
                             )
+                            # DEF-M09-1: Persist permission denials to JSONL audit trail
+                            self.logger.log_event("permission_denied", "CYRAX", {
+                                "command": command[:200],
+                                "reason": perm_reason,
+                                "action_type": self.permission_gate.classify_action(command),
+                            })
                             continue
 
                         # Fix browser.type -> type_text mapping
@@ -1250,6 +1262,12 @@ RESPONSE STYLE:
                             scope_msg = f"[Scope Violation] {scope_reason}"
                             display.show_tool_output("CYRAX", scope_msg)
                             action_results.append(f"[Tool Result for: {command}]\n{scope_msg}")
+                            # DEF-M09-1: Persist scope violations to JSONL audit trail
+                            self.logger.log_event("scope_violation", "CYRAX", {
+                                "command": command[:200],
+                                "reason": scope_reason,
+                                "action_type": "shell_command",
+                            })
                             continue
 
                         # Permission check
@@ -1258,6 +1276,12 @@ RESPONSE STYLE:
                             perm_msg = f"[Permission Denied] {perm_reason}"
                             display.show_tool_output("CYRAX", perm_msg)
                             action_results.append(f"[Tool Result for: {command}]\n{perm_msg}")
+                            # DEF-M09-1: Persist permission denials to JSONL audit trail
+                            self.logger.log_event("permission_denied", "CYRAX", {
+                                "command": command[:200],
+                                "reason": perm_reason,
+                                "action_type": self.permission_gate.classify_action(command),
+                            })
                             continue
 
                         self._actions_executed_this_turn += 1
