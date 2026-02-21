@@ -47,6 +47,41 @@ def _normalize_python_cmd(cmd: str) -> str:
     return cmd
 
 
+def _adapt_windows_unix_filters(command: str) -> str:
+    """
+    Adapt common Unix text-filter usage for Windows cmd.exe.
+
+    The model frequently emits pipelines like `... | grep ...` which fail on
+    stock Windows installs. Convert simple grep cases to findstr so commands
+    still run without requiring GNU tools.
+    """
+    if not IS_WINDOWS:
+        return command
+
+    # Convert `| grep ...` into `| findstr ...` for common cases.
+    # Supports optional -i and quoted or unquoted patterns.
+    grep_pipe_pattern = re.compile(
+        r"\|\s*grep\s+(?P<flags>(?:-[A-Za-z]+\s+)*)?(?P<pattern>'[^']*'|\"[^\"]*\"|\S+)",
+        flags=re.IGNORECASE,
+    )
+
+    def _replace_grep(match: re.Match) -> str:
+        flags = (match.group("flags") or "").lower()
+        pattern = (match.group("pattern") or "").strip()
+        if (pattern.startswith("'") and pattern.endswith("'")) or (
+            pattern.startswith('"') and pattern.endswith('"')
+        ):
+            pattern = pattern[1:-1]
+
+        findstr_flags = ["/R", f'/C:"{pattern}"']
+        if "i" in flags:
+            findstr_flags.insert(0, "/I")
+
+        return "| findstr " + " ".join(findstr_flags)
+
+    return grep_pipe_pattern.sub(_replace_grep, command)
+
+
 def _extract_python_c_code(command: str) -> Optional[str]:
     """
     Extract Python code from a 'python -c "..."' or "python3 -c '...'" command.
@@ -472,6 +507,7 @@ class ToolExecutor:
         self.scope_enforcer = scope_enforcer
         self.env = os.environ.copy()
         self.env["TERM"] = "dumb"  # Prevent color codes in tool output
+        self._active_process: Optional[subprocess.Popen] = None
 
     def _is_dangerous(self, command: str) -> bool:
         """Check if a command is potentially dangerous."""
@@ -526,6 +562,9 @@ class ToolExecutor:
 
         # Normalize python3 -> python on Windows
         command = _normalize_python_cmd(command)
+
+        # Windows compatibility shim for common Unix filters.
+        command = _adapt_windows_unix_filters(command)
 
         # Handle python -c code that can't run inline:
         # - Multi-line code (Windows CMD can't handle newlines in -c args)
@@ -593,6 +632,7 @@ class ToolExecutor:
                 popen_kwargs["preexec_fn"] = os.setsid
 
             process = subprocess.Popen(command, **popen_kwargs)
+            self._active_process = process
 
             try:
                 stdout, stderr = process.communicate(timeout=exec_timeout)
@@ -606,6 +646,8 @@ class ToolExecutor:
                 process.wait()
                 stdout, stderr = b"", b"Command timed out"
                 exit_code = -1
+            finally:
+                self._active_process = None
 
             stdout_str = stdout.decode("utf-8", errors="replace").strip()
             stderr_str = stderr.decode("utf-8", errors="replace").strip()
@@ -620,7 +662,6 @@ class ToolExecutor:
             )
 
             return result
-
         except FileNotFoundError:
             msg = f"Command not found: {command.split()[0] if command else command}"
             logger.log_error("executor", msg)
@@ -710,6 +751,19 @@ class ToolExecutor:
         check_cmd = "where" if IS_WINDOWS else "which"
         result = self.execute(f"{check_cmd} {quote_arg(tool_name)}", timeout=5)
         return result.success
+
+    def interrupt_current(self):
+        """Best-effort interrupt of the currently running subprocess."""
+        process = self._active_process
+        if not process:
+            return
+        try:
+            if IS_WINDOWS:
+                process.kill()
+            else:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except Exception:
+            pass
 
     def write_file(self, path: str, content: str) -> CommandResult:
         """Write content to a file in the work directory."""

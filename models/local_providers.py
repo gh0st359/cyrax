@@ -82,6 +82,83 @@ class OllamaClient(BaseModelClient):
             logger.log_error("model", f"Ollama error: {e}")
             raise
 
+    def generate_stream(
+        self,
+        system: str,
+        messages: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ):
+        """Stream response chunks from Ollama /api/chat."""
+        logger = get_logger()
+
+        api_messages = [{"role": "system", "content": system}]
+        for msg in messages:
+            api_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        payload = {
+            "model": self.model,
+            "messages": api_messages,
+            "stream": True,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+
+        full_content = []
+        prompt_eval_count = 0
+        eval_count = 0
+
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.api_url}/api/chat",
+                json=payload,
+                timeout=300.0,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    delta = data.get("message", {}).get("content", "")
+                    if delta:
+                        full_content.append(delta)
+                        yield {"delta": delta, "done": False}
+
+                    if data.get("done"):
+                        prompt_eval_count = data.get("prompt_eval_count", 0)
+                        eval_count = data.get("eval_count", 0)
+                        break
+
+            content = "".join(full_content)
+            logger.log_model_call(
+                agent_id="model",
+                provider=self.provider_name,
+                model=self.model,
+                tokens_in=prompt_eval_count,
+                tokens_out=eval_count,
+            )
+            yield {
+                "delta": "",
+                "done": True,
+                "content": content,
+                "tokens_in": prompt_eval_count,
+                "tokens_out": eval_count,
+            }
+
+        except httpx.ConnectError:
+            error_msg = (
+                f"Cannot connect to Ollama at {self.api_url}. "
+                "Ensure Ollama is running (ollama serve)."
+            )
+            logger.log_error("model", error_msg)
+            raise ConnectionError(error_msg)
+        except Exception as e:
+            logger.log_error("model", f"Ollama streaming error: {e}")
+            raise
+
 
 class LMStudioClient(BaseModelClient):
     """Client for LM Studio local server (OpenAI-compatible API)."""

@@ -274,6 +274,7 @@ class CyraxOrchestrator:
 
         # Pause flag
         self._pause_requested = False
+        self._hard_interrupt_requested = False
 
         # Load and validate prompt templates at startup
         self._orchestrator_prompt_template = self._load_orchestrator_prompt_template()
@@ -619,6 +620,8 @@ RESPONSE STYLE:
                 messages=self.conversation.get_messages(),
                 temperature=temp_override,
             ):
+                if self._pause_requested or self._hard_interrupt_requested:
+                    break
                 if chunk.get("done"):
                     break
                 delta = chunk.get("delta", "")
@@ -659,7 +662,7 @@ RESPONSE STYLE:
 
         for depth in range(self._max_response_depth):
             # Check for pause request
-            if self._pause_requested:
+            if self._pause_requested or self._hard_interrupt_requested:
                 self._pause_requested = False
                 break
 
@@ -1023,7 +1026,7 @@ RESPONSE STYLE:
         action_results = []
 
         for pos, action_type, match in actions:
-            if self._pause_requested:
+            if self._pause_requested or self._hard_interrupt_requested:
                 action_results.append("[Action Feedback] Pause requested. Stopping after current completed actions.")
                 break
             self._actions_executed_this_turn += 1
@@ -1053,7 +1056,7 @@ RESPONSE STYLE:
                     continue
                 cmds = split_compound_commands(sanitized)
                 for command in cmds:
-                    if self._pause_requested:
+                    if self._pause_requested or self._hard_interrupt_requested:
                         action_results.append("[Action Feedback] Pause requested. Stopping before executing additional commands.")
                         break
                     command = command.strip()
@@ -1599,6 +1602,19 @@ RESPONSE STYLE:
         """Request a pause in the current operation (called from TUI)."""
         self._pause_requested = True
 
+    def request_hard_interrupt(self):
+        """Immediately interrupt current execution and stop background activity."""
+        self._pause_requested = True
+        self._hard_interrupt_requested = True
+        try:
+            self.tools.executor.interrupt_current()
+        except Exception:
+            pass
+        try:
+            self.agent_pool.kill_all(graceful=False)
+        except Exception:
+            pass
+
     def queue_user_message(self, message: str):
         """Queue a message to send on the next turn (replaces auto-continue)."""
         self._queued_user_message = message
@@ -1902,6 +1918,8 @@ RESPONSE STYLE:
                     continue
 
             # Run AI in background thread so Ctrl+C interrupts cleanly
+            self._pause_requested = False
+            self._hard_interrupt_requested = False
             self._chat_result = None
             self._chat_error = None
             ai_thread = threading.Thread(
@@ -1913,14 +1931,22 @@ RESPONSE STYLE:
                 while ai_thread.is_alive():
                     ai_thread.join(timeout=0.3)
             except KeyboardInterrupt:
-                self.request_pause()
+                self.request_hard_interrupt()
                 display.show_warning(
-                    "\nInterrupting after current action... "
+                    "\nInterrupt requested. Stopping immediately... "
                     "(Ctrl+C again to force quit)"
                 )
                 try:
-                    ai_thread.join(timeout=15)
+                    ai_thread.join(timeout=3)
                 except KeyboardInterrupt:
+                    if self._campaign_mode:
+                        self._mark_agents_orphaned_if_active()
+                        self._save_campaign_state()
+                        display.show_cyrax_message("Campaign state saved. Ending session.")
+                    else:
+                        display.show_cyrax_message("Force quit. Ending session.")
+                    break
+                if ai_thread.is_alive():
                     if self._campaign_mode:
                         self._mark_agents_orphaned_if_active()
                         self._save_campaign_state()
