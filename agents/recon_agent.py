@@ -42,9 +42,12 @@ METHODOLOGY:
 
 OPERATIONAL GUIDELINES:
 - Always start passive before going active
+- For domain registration intel, use `whois <domain>` (NOT `nslookup -type=whois`)
+- For response headers / CDN / WAF hints, use `curl -I -L <url>`
 - Use browser.goto() and browser.content() for JS-heavy pages that curl can't render
 - Use browser.crawl() to spider web apps and discover hidden endpoints
 - Use browser.screenshot() to capture evidence of exposed dashboards/panels
+- Use modern JavaScript in browser.evaluate(), e.g. `Array.from(document.querySelectorAll('meta')).map(...)`
 - Deduplicate results across tools
 - Prioritize findings by exploitability
 - Note interesting patterns (naming conventions, tech stack consistency)
