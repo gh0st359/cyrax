@@ -1029,11 +1029,13 @@ RESPONSE STYLE:
             if self._pause_requested or self._hard_interrupt_requested:
                 action_results.append("[Action Feedback] Pause requested. Stopping after current completed actions.")
                 break
-            self._actions_executed_this_turn += 1
+            # NOTE: _actions_executed_this_turn is incremented inside each branch
+            # only when the action is actually dispatched — not for skipped/filtered actions.
 
             if action_type == "write_file":
                 file_path = match.group(1).strip()
                 content = strip_markdown_fences(match.group(2).strip())
+                self._actions_executed_this_turn += 1
                 result = self.tools.executor.write_file(file_path, content)
                 display.show_tool_output("CYRAX", result.output)
                 action_results.append(
@@ -1043,6 +1045,7 @@ RESPONSE STYLE:
                 )
                 if result.success:
                     self.mission.add_file(file_path)
+                    self._cmds_succeeded_this_turn += 1
 
             elif action_type == "execute":
                 raw_cmd = match.group(1).strip()
@@ -1134,6 +1137,7 @@ RESPONSE STYLE:
                         method = getattr(self.browser, actual_method_name, None)
                         if method:
                             try:
+                                self._actions_executed_this_turn += 1
                                 with display.get_spinner("Executing..."):
                                     br_result = method(*args, **kwargs)
                                 display.show_tool_output("CYRAX", br_result.output)
@@ -1207,6 +1211,7 @@ RESPONSE STYLE:
                             action_results.append(f"[Tool Result for: {command}]\n{perm_msg}")
                             continue
 
+                        self._actions_executed_this_turn += 1
                         with display.get_spinner("Executing..."):
                             result = self.tools.execute_raw(command)
                         display.show_tool_output("CYRAX", result.output)
@@ -1240,10 +1245,12 @@ RESPONSE STYLE:
             elif action_type == "spawn":
                 agent_type = match.group(1)
                 task = match.group(2).strip()
+                self._actions_executed_this_turn += 1
                 report = self._spawn_and_run_agent(agent_type, task)
                 if report:
                     if report.get("status") == "spawned":
                         # Non-blocking: agent is running in background
+                        self._cmds_succeeded_this_turn += 1
                         action_results.append(
                             f"[Agent {report['agent_id']} Spawned]\n"
                             f"Status: running in background (PID will be assigned)\n"
@@ -1256,6 +1263,7 @@ RESPONSE STYLE:
                             f"[Agent Spawn Skipped]\nSummary: {report['summary']}"
                         )
                     else:
+                        self._cmds_succeeded_this_turn += 1
                         action_results.append(
                             f"[Agent {report['agent_id']} Report]\n"
                             f"Status: {report['status']}\n"
@@ -1527,9 +1535,12 @@ RESPONSE STYLE:
         summary = report.get("summary", "No summary")
         findings = report.get("findings", [])
 
+        # Include accurate remaining-agent count in the completion message
+        remaining = max(0, self.agent_pool.active_count() - 1)
+        remaining_str = f", {remaining} still active" if remaining > 0 else ""
         display.show_info(
             f"Agent {agent_id} completed ({status}): "
-            f"{len(findings)} findings. {summary[:120]}"
+            f"{len(findings)} findings{remaining_str}. {summary[:120]}"
         )
 
         # Store the report

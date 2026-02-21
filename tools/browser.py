@@ -600,18 +600,34 @@ class BrowserManager:
     # === Network Interception ===
 
     def intercept_requests(self, url_pattern: str = "**/*") -> BrowserResult:
-        """Start intercepting network requests matching a pattern."""
+        """Start intercepting network requests matching a glob/substring pattern.
+
+        ``url_pattern`` supports glob wildcards (* and **) as well as plain
+        substring matching.  Every new call resets the captured request list so
+        that callers always get a clean slate.
+        """
+        import fnmatch
         self._ensure_started()
         try:
             self._intercepted_requests = []
+            self._intercept_pattern = url_pattern  # stored for display
+
+            def _matches(url: str, pattern: str) -> bool:
+                if pattern == "**/*":
+                    return True
+                # Try glob match first; fall back to substring
+                if fnmatch.fnmatch(url, pattern):
+                    return True
+                return pattern.lstrip("*").rstrip("*") in url
 
             def handle_request(request):
-                self._intercepted_requests.append({
-                    "url": request.url,
-                    "method": request.method,
-                    "headers": dict(request.headers),
-                    "post_data": request.post_data[:500] if request.post_data else None,
-                })
+                if _matches(request.url, url_pattern):
+                    self._intercepted_requests.append({
+                        "url": request.url,
+                        "method": request.method,
+                        "headers": dict(request.headers),
+                        "post_data": request.post_data[:500] if request.post_data else None,
+                    })
 
             self._page.on("request", handle_request)
             return BrowserResult(
