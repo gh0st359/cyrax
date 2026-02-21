@@ -1,0 +1,26 @@
+{
+  "benchmark_id": "B20260221_182855",
+  "generated_at": "2026-02-21T18:28:55.527594+00:00",
+  "dry_run": false,
+  "iterations": 5000,
+  "thresholds": {
+    "action_extract_ops_per_sec": 10000,
+    "ipc_serialize_ops_per_sec": 50000,
+    "ipc_deserialize_ops_per_sec": 20000,
+    "finding_store_ops_per_sec": 200
+  },
+  "results": {
+    "action_extract_ops_per_sec": 150075.3,
+    "ipc_serialize_ops_per_sec": 292608.7,
+    "ipc_deserialize_ops_per_sec": 284588.3,
+    "finding_store_ops_per_sec": 428.2,
+    "unit_test_duration_s": 3.45
+  },
+  "status_per_kpi": {
+    "action_extract_ops_per_sec": "pass",
+    "ipc_serialize_ops_per_sec": "pass",
+    "ipc_deserialize_ops_per_sec": "pass",
+    "finding_store_ops_per_sec": "pass"
+  },
+  "overall_status": "pass"
+}
