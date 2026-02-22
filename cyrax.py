@@ -791,7 +791,15 @@ RESPONSE STYLE:
                         break
 
             if not action_results:
-                should_force_action = (depth == 0 and self._actions_executed_this_turn == 0) or self._is_planning_without_actions(current_response)
+                # Only force actions in operational mode (target set).  In
+                # standby mode the system prompt explicitly says "Do NOT
+                # execute any commands", so injecting [Action Feedback] would
+                # override that and cause the LLM to run unsolicited commands.
+                in_operational_mode = bool(self.campaign.target)
+                should_force_action = in_operational_mode and (
+                    (depth == 0 and self._actions_executed_this_turn == 0)
+                    or self._is_planning_without_actions(current_response)
+                )
                 if should_force_action:
                     self.logger.info("No actions in response (reasoning/planning-only turn)")
                     self.conversation.add_message(
