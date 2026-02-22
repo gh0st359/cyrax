@@ -121,6 +121,14 @@ def test_live_benchmark_unit_test_duration_from_mock(monkeypatch):
 def test_live_benchmark_overall_status_is_pass(monkeypatch):
     """With normal code, all KPIs should exceed their thresholds."""
     import benchmark as bmod
+    # bench_unit_tests is mocked to avoid nested pytest invocations.
+    # bench_finding_store is mocked because pytest-cov instrumentation adds
+    # enough overhead to SQLite operations that the real function can fall
+    # below the threshold on slow CI runners (observed: 26 ops/s on Windows
+    # with coverage enabled vs 193 ops/s without).  The *logic* being tested
+    # here is that run_benchmarks() correctly reports "pass" when all KPIs
+    # exceed their thresholds — not the raw SQLite throughput of the CI runner.
+    monkeypatch.setattr(bmod, "bench_finding_store", lambda iters: 500.0)
     monkeypatch.setattr(bmod, "bench_unit_tests", lambda: 3.0)
     report = run_benchmarks(iterations=200, dry_run=False)
     assert report["overall_status"] == "pass", (
