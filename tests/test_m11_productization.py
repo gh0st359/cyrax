@@ -149,7 +149,8 @@ def test_check_milestones_fails_for_pending_milestone(tmp_path, monkeypatch):
     tracker.parent.mkdir(parents=True)
     tracker.write_text(
         "| M00 | Control Plane | done | ... |\n"
-        "| M01 | Environment | pending | — |\n"
+        "| M01 | Environment | pending | — |\n",
+        encoding="utf-8",
     )
 
     import release_check as rc

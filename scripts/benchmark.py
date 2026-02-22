@@ -100,6 +100,11 @@ def bench_finding_store(iterations: int) -> float:
                 evidence="evidence snippet",
             )
         elapsed = time.perf_counter() - start
+        # Explicitly close the SQLite connection before the temp directory is
+        # deleted.  On Windows, SQLite holds mandatory file locks (including
+        # WAL/SHM sidecar files) until the connection is closed; without this
+        # call TemporaryDirectory.__exit__ raises PermissionError [WinError 32].
+        kb.close()
     return iterations / elapsed
 
 
