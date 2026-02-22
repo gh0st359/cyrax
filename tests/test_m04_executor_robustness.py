@@ -16,8 +16,11 @@ import pytest
 from tools import executor as executor_module
 from tools.executor import ToolExecutor, _adapt_windows_commands, _resolve_interpreter
 
-# Cross-platform long-running command for timeout tests
-_SLEEP_CMD = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+# Cross-platform long-running command for timeout tests.
+# 5 seconds is long enough to trigger a 1-second timeout, but short enough
+# that pipe-drain on Windows (where orphaned child processes hold pipes open
+# after the shell is killed) completes well within pytest's 60-second limit.
+_SLEEP_CMD = f'"{sys.executable}" -c "import time; time.sleep(5)"'
 
 
 # ── Path traversal hardening ───────────────────────────────────────────────────
@@ -132,9 +135,15 @@ def test_resolve_interpreter_falls_back(monkeypatch):
 
     monkeypatch.setattr(executor_module._shutil, "which", fake_which)
     result = _resolve_interpreter("bash")
-    # Should fall back to sh or dash (both available on Linux)
-    assert result != "bash"
-    assert result in ("sh", "dash", "python3", "python")  # reasonable fallback
+
+    if sys.platform == "win32":
+        # On Windows without Git Bash in PATH, no Unix shell fallback exists,
+        # so _resolve_interpreter returns the original name unchanged.
+        assert result in ("sh", "dash", "python3", "python", "bash")
+    else:
+        # On Linux/macOS, sh or dash must be available as a fallback
+        assert result != "bash"
+        assert result in ("sh", "dash", "python3", "python")
 
 
 @pytest.mark.unit

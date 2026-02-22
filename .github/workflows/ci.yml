@@ -35,18 +35,13 @@ jobs:
         run: python scripts/preflight.py
 
       - name: Run unit tests
-        run: pytest tests/ -m "unit" -q --tb=short --timeout=60
+        run: python -m pytest tests/ -m "unit" -q --tb=short --timeout=60
 
       - name: Run integration tests
-        run: pytest tests/ -m "integration" -q --tb=short --timeout=120
+        run: python -m pytest tests/ -m "integration" -q --tb=short --timeout=120
 
       - name: Run all tests with coverage
-        run: |
-          pytest tests/ -q --tb=short --timeout=120 \
-            --cov=cyrax --cov=agents --cov=memory \
-            --cov=models --cov=tools --cov=utils --cov=ui \
-            --cov-report=term-missing \
-            --cov-fail-under=30
+        run: python -m pytest tests/ -q --tb=short --timeout=120 --cov=cyrax --cov=agents --cov=memory --cov=models --cov=tools --cov=utils --cov=ui --cov-report=term-missing --cov-fail-under=30
 
   lint:
     name: "Lint"

@@ -24,18 +24,17 @@ _IS_WINDOWS = os.name == "nt"
 def _make_wake_pair():
     """
     Create a cross-platform socket pair for waking up select().
-    On Unix, os.pipe() works with select(). On Windows, select() only
-    works on sockets, so we need a socket pair.
 
-    socket.socketpair() is available on Unix and Python 3.12+ Windows.
-    For Windows Python < 3.12, fall back to a TCP loopback pair.
+    On Windows, select() only works with WinSock sockets (AF_INET/AF_INET6).
+    Python 3.12+ added socket.socketpair() for Windows, but it creates AF_UNIX
+    sockets which may not be reliably selectable on all Windows Server versions
+    used in CI. Always use a TCP loopback pair on Windows for maximum compat.
+
+    On Unix, socket.socketpair() creates AF_UNIX sockets that work with select().
     """
-    if hasattr(socket, "socketpair"):
-        try:
-            return socket.socketpair()
-        except (OSError, AttributeError):
-            pass
-    # Fallback: TCP loopback pair (works on all platforms/versions)
+    if not _IS_WINDOWS and hasattr(socket, "socketpair"):
+        return socket.socketpair()
+    # TCP loopback pair — works on all platforms and all Python versions.
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", 0))
