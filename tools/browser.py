@@ -3,14 +3,11 @@ CYRAX Browser Automation Module
 Playwright-based browser control for web interaction, crawling, and exploitation.
 """
 
-import base64
 import json
 import re
-import os
-import tempfile
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse
 
 from utils.logging import get_logger
 
@@ -137,6 +134,48 @@ class BrowserManager:
             )
         except Exception as e:
             raise RuntimeError(f"Failed to start browser: {e}")
+
+    @staticmethod
+    def preflight() -> tuple[bool, str]:
+        """Check whether the browser stack is usable without starting it.
+
+        Returns (available: bool, message: str).  Call this before the first
+        browser action to give the operator an actionable diagnosis instead of
+        a raw exception.
+
+        Checks:
+        1. playwright Python package is importable.
+        2. At least one Chromium/Chrome executable is discoverable.
+        """
+        try:
+            import playwright  # noqa: F401
+        except ImportError:
+            return False, (
+                "Playwright package not installed. Fix: pip install playwright && playwright install chromium"
+            )
+
+        # Attempt to locate the Playwright-managed Chromium binary
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                chromium_path = p.chromium.executable_path
+                if not chromium_path or not Path(chromium_path).exists():
+                    return False, (
+                        f"Chromium binary not found at '{chromium_path}'. "
+                        "Fix: playwright install chromium"
+                    )
+        except Exception as exc:
+            return False, (
+                f"Browser preflight failed: {exc}. "
+                "Fix: playwright install chromium"
+            )
+
+        return True, "Browser stack is available (Playwright + Chromium found)."
+
+    def available(self) -> bool:
+        """Return True if the browser stack appears usable (non-throwing check)."""
+        ok, _ = self.preflight()
+        return ok
 
     # === Navigation ===
 
@@ -600,18 +639,34 @@ class BrowserManager:
     # === Network Interception ===
 
     def intercept_requests(self, url_pattern: str = "**/*") -> BrowserResult:
-        """Start intercepting network requests matching a pattern."""
+        """Start intercepting network requests matching a glob/substring pattern.
+
+        ``url_pattern`` supports glob wildcards (* and **) as well as plain
+        substring matching.  Every new call resets the captured request list so
+        that callers always get a clean slate.
+        """
+        import fnmatch
         self._ensure_started()
         try:
             self._intercepted_requests = []
+            self._intercept_pattern = url_pattern  # stored for display
+
+            def _matches(url: str, pattern: str) -> bool:
+                if pattern == "**/*":
+                    return True
+                # Try glob match first; fall back to substring
+                if fnmatch.fnmatch(url, pattern):
+                    return True
+                return pattern.lstrip("*").rstrip("*") in url
 
             def handle_request(request):
-                self._intercepted_requests.append({
-                    "url": request.url,
-                    "method": request.method,
-                    "headers": dict(request.headers),
-                    "post_data": request.post_data[:500] if request.post_data else None,
-                })
+                if _matches(request.url, url_pattern):
+                    self._intercepted_requests.append({
+                        "url": request.url,
+                        "method": request.method,
+                        "headers": dict(request.headers),
+                        "post_data": request.post_data[:500] if request.post_data else None,
+                    })
 
             self._page.on("request", handle_request)
             return BrowserResult(
@@ -676,7 +731,7 @@ class BrowserManager:
                 self._page.goto(url, wait_until="domcontentloaded")
             return BrowserResult(
                 action="new_tab", success=True,
-                data=f"New tab opened" + (f": {url}" if url else ""),
+                data="New tab opened" + (f": {url}" if url else ""),
                 url=self._page.url if url else "",
             )
         except Exception as e:
@@ -951,9 +1006,6 @@ BROWSER_COMMANDS = {
 }
 
 
-
-
-
 def browser_command_has_shell_operators(command_str: str) -> bool:
     """Return True if command mixes browser call with shell operators/pipes."""
     cmd = command_str.strip()
@@ -984,6 +1036,7 @@ def validate_browser_command(method: str, args: list, kwargs: dict) -> Optional[
         )
 
     return None
+
 
 def is_browser_command(command_str: str) -> bool:
     """Check if a command string looks like a browser command (browser.xxx(...))."""
@@ -1060,6 +1113,54 @@ def parse_browser_command(command_str: str) -> Optional[tuple[str, list, dict]]:
             args.append(_parse_value(part))
 
     return method, args, kwargs
+
+
+def parse_browser_command_with_error(
+    command_str: str,
+) -> tuple[Optional[tuple[str, list, dict]], Optional[str]]:
+    """Like parse_browser_command but returns (result, error_message) instead of None.
+
+    Returns:
+        (parsed_tuple, None)   — on success
+        (None, error_message)  — on parse failure, with actionable diagnostics
+    """
+    command_str = command_str.strip()
+
+    # Does it look like a browser call at all?
+    if not re.match(r"browser\.\w+\(", command_str):
+        return None, (
+            f"Not a browser command: '{command_str[:80]}'. "
+            "Browser commands must start with browser.<method>(...)."
+        )
+
+    # Extract method name
+    method_match = re.match(r"browser\.(\w+)\(", command_str)
+    if not method_match:
+        return None, f"Could not extract method name from: '{command_str[:80]}'"
+
+    method = method_match.group(1)
+    if method not in BROWSER_COMMANDS:
+        valid = ", ".join(sorted(BROWSER_COMMANDS.keys()))
+        return None, (
+            f"Unknown browser method '{method}'. "
+            f"Valid methods: {valid}"
+        )
+
+    # Does it end with a closing paren?
+    if not re.match(r"browser\.(\w+)\(.*\)$", command_str, re.DOTALL):
+        return None, (
+            f"Malformed browser command — missing closing ')': '{command_str[:80]}'. "
+            "Ensure the command is on a single line and has balanced parentheses."
+        )
+
+    parsed = parse_browser_command(command_str)
+    if parsed is None:
+        return None, (
+            f"Failed to parse browser command arguments: '{command_str[:80]}'. "
+            "Check that string arguments are quoted and the call is well-formed."
+        )
+
+    return parsed, None
 
 
 def _parse_value(value_str: str):

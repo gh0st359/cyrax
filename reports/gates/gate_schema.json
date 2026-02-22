@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CYRAX Milestone Gate Report",
+  "type": "object",
+  "required": ["milestone", "status", "timestamp", "checks", "defects", "recommendation"],
+  "properties": {
+    "milestone": {
+      "type": "string",
+      "pattern": "^M[0-9]{2}$",
+      "description": "Milestone identifier (e.g. M00, M03)"
+    },
+    "title": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "BLOCKED"]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "result", "evidence"],
+        "properties": {
+          "name": { "type": "string" },
+          "result": { "type": "string", "enum": ["PASS", "FAIL", "SKIP", "WARN"] },
+          "evidence": { "type": "string" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "description", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+          "description": { "type": "string" },
+          "status": { "type": "string", "enum": ["open", "resolved", "risk_accepted"] },
+          "remediation": { "type": "string" }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "skipped": { "type": "integer" },
+        "total": { "type": "integer" }
+      }
+    },
+    "benchmark_smoke": {
+      "type": "object",
+      "properties": {
+        "run": { "type": "boolean" },
+        "regression": { "type": "boolean" },
+        "notes": { "type": "string" }
+      }
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": ["GO", "NO-GO"]
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

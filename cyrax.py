@@ -17,7 +17,6 @@ import argparse
 import hashlib
 import difflib
 import threading
-import asyncio
 import string
 import time
 import importlib.resources
@@ -45,15 +44,15 @@ if _missing:
     print(f"    Run: {sys.executable} -m pip install -r requirements.txt\n")
     sys.exit(1)
 
-import yaml
+import yaml  # noqa: E402
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from models.model_manager import ModelManager
-from tools.executor import ToolExecutor, split_compound_commands, sanitize_command
-from tools.tool_registry import ToolRegistry
-from tools.browser import (
+from models.model_manager import ModelManager  # noqa: E402
+from tools.executor import ToolExecutor, split_compound_commands, sanitize_command  # noqa: E402
+from tools.tool_registry import ToolRegistry  # noqa: E402
+from tools.browser import (  # noqa: E402
     BrowserManager,
     parse_browser_command,
     is_browser_command,
@@ -61,23 +60,23 @@ from tools.browser import (
     validate_browser_command,
     browser_command_has_shell_operators,
 )
-from memory.conversation import ConversationMemory
-from memory.knowledge_base import KnowledgeBase
-from memory.campaign_state import CampaignState
-from memory.mission_memory import MissionMemory
-from agents.base_agent import BaseAgent
-from agents.recon_agent import ReconAgent
-from agents.exploit_agent import ExploitAgent
-from agents.post_exploit_agent import PostExploitAgent
-from agents.ad_agent import ActiveDirectoryAgent
-from agents.web_agent import WebAgent
-from agents.cloud_agent import CloudAgent
-from agents.osint_agent import OSINTAgent
-from utils import display
-from utils.logging import init_logger, get_logger
-from utils.platform_info import get_platform_context, get_default_work_dir
-from utils.safety import ScopeEnforcer, PermissionGate
-from agents.agent_pool import SubprocessAgentPool
+from memory.conversation import ConversationMemory  # noqa: E402
+from memory.knowledge_base import KnowledgeBase  # noqa: E402
+from memory.campaign_state import CampaignState  # noqa: E402
+from memory.mission_memory import MissionMemory  # noqa: E402
+from agents.base_agent import BaseAgent  # noqa: E402
+from agents.recon_agent import ReconAgent  # noqa: E402
+from agents.exploit_agent import ExploitAgent  # noqa: E402
+from agents.post_exploit_agent import PostExploitAgent  # noqa: E402
+from agents.ad_agent import ActiveDirectoryAgent  # noqa: E402
+from agents.web_agent import WebAgent  # noqa: E402
+from agents.cloud_agent import CloudAgent  # noqa: E402
+from agents.osint_agent import OSINTAgent  # noqa: E402
+from utils import display  # noqa: E402
+from utils.logging import init_logger  # noqa: E402
+from utils.platform_info import get_platform_context, get_default_work_dir  # noqa: E402
+from utils.safety import ScopeEnforcer, PermissionGate  # noqa: E402
+from agents.agent_pool import SubprocessAgentPool  # noqa: E402
 
 
 AGENT_CLASSES = {
@@ -142,6 +141,36 @@ def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
 
     actions.sort(key=lambda x: x[0])
     return actions
+
+
+def _find_unclosed_tags(response: str) -> list[str]:
+    """
+    Detect action tags that were opened but never closed (malformed LLM output).
+
+    Returns a list of human-readable descriptions of unclosed tags so the
+    orchestrator can feed them back to the model as [Action Feedback].
+
+    DEF-M07-1: Without this, the model receives no signal that its action
+    syntax was broken — it thinks the command ran, but it silently did nothing.
+    """
+    unclosed = []
+    # Paired tags that require a closing counterpart
+    paired = [
+        ("EXECUTE", r'\[EXECUTE\]', r'\[/EXECUTE\]'),
+        ("WRITE_FILE", r'\[WRITE_FILE\b[^\]]*\]', r'\[/WRITE_FILE\]'),
+        ("SPAWN", r'\[SPAWN\b[^\]]*\]', r'\[/SPAWN\]'),
+        ("STORE", r'\[STORE\b[^\]]*\]', r'\[/STORE\]'),
+        ("FINDING", r'\[FINDING\b[^\]]*\]', r'\[/FINDING\]'),
+    ]
+    for tag_name, opener_pat, closer_pat in paired:
+        opens = len(re.findall(opener_pat, response))
+        closes = len(re.findall(closer_pat, response))
+        if opens > closes:
+            unclosed.append(
+                f"{tag_name} (opened {opens}x, closed {closes}x — "
+                f"missing [{'/'+tag_name}] closing tag)"
+            )
+    return unclosed
 
 
 def _get_failure_guidance(command: str, error: str) -> str:
@@ -388,7 +417,6 @@ class CyraxOrchestrator:
         conv_file = self._campaign_dir / "conversation.json"
         conv_file.write_text(self.conversation.to_json())
 
-
     def _mark_agents_orphaned_if_active(self):
         """Mark active agents as orphaned before persisting/exit."""
         if self.agent_pool.get_running():
@@ -546,6 +574,9 @@ RESPONSE STYLE:
         self._actions_executed_this_turn = 0
         self._recent_cmds_this_turn = []
         self._cmds_succeeded_this_turn = 0
+        # DEF-M07-2: Reset cross-turn failure pattern counts so a command that
+        # failed against target A isn't blocked when retried against target B.
+        self._failed_pattern_counts = {}
 
         # Extract target from first user message if scope not yet configured
         if not self.scope.enabled:
@@ -653,8 +684,6 @@ RESPONSE STYLE:
         Process CYRAX's response for embedded actions iteratively.
         Each loop: extract actions, execute, get follow-up, repeat.
         """
-        from tools.executor import strip_markdown_fences
-
         accumulated = response
         current_response = response
         seen_hashes_this_turn: set[str] = set()
@@ -796,9 +825,14 @@ RESPONSE STYLE:
                 self.logger.log_error("CYRAX", f"Follow-up generation failed: {e}")
                 break
         else:
-            # Hit max depth — just log it, don't inject system messages
+            # DEF-M07-4: Notify operator when depth limit is reached — previously
+            # this was logged silently, leaving the operator unaware the AI was spinning.
             self.logger.info(
                 f"Response processing depth limit reached ({self._max_response_depth})"
+            )
+            display.show_warning(
+                f"Response depth limit reached ({self._max_response_depth} iterations). "
+                "The AI may be in a reasoning loop. Type a message to redirect, or /pause to stop."
             )
 
         # Don't clear _consecutive_cmd_failures here — persist across the response loop
@@ -1025,15 +1059,28 @@ RESPONSE STYLE:
         actions = _find_all_actions(response)
         action_results = []
 
+        # DEF-M07-1: Detect and feed back unclosed/malformed action tags so the
+        # model knows its syntax was broken (otherwise it silently gets no results).
+        unclosed = _find_unclosed_tags(response)
+        if unclosed:
+            tag_list = "; ".join(unclosed)
+            action_results.append(
+                f"[Action Feedback] Malformed action tag(s) detected — these were NOT executed: "
+                f"{tag_list}. Each action tag must have a matching closing tag on its own line. "
+                f"Example: [EXECUTE]\\nnmap -sV target\\n[/EXECUTE]"
+            )
+
         for pos, action_type, match in actions:
             if self._pause_requested or self._hard_interrupt_requested:
                 action_results.append("[Action Feedback] Pause requested. Stopping after current completed actions.")
                 break
-            self._actions_executed_this_turn += 1
+            # NOTE: _actions_executed_this_turn is incremented inside each branch
+            # only when the action is actually dispatched — not for skipped/filtered actions.
 
             if action_type == "write_file":
                 file_path = match.group(1).strip()
                 content = strip_markdown_fences(match.group(2).strip())
+                self._actions_executed_this_turn += 1
                 result = self.tools.executor.write_file(file_path, content)
                 display.show_tool_output("CYRAX", result.output)
                 action_results.append(
@@ -1043,6 +1090,7 @@ RESPONSE STYLE:
                 )
                 if result.success:
                     self.mission.add_file(file_path)
+                    self._cmds_succeeded_this_turn += 1
 
             elif action_type == "execute":
                 raw_cmd = match.group(1).strip()
@@ -1113,6 +1161,12 @@ RESPONSE STYLE:
                                 scope_msg = f"[Scope Violation] {reason}"
                                 display.show_tool_output("CYRAX", scope_msg)
                                 action_results.append(f"[Tool Result for: {command}]\n{scope_msg}")
+                                # DEF-M09-1: Persist scope violations to JSONL audit trail
+                                self.logger.log_event("scope_violation", "CYRAX", {
+                                    "command": command[:200],
+                                    "reason": reason,
+                                    "action_type": "browser_navigate",
+                                })
                                 continue
 
                         # Permission gate for attack payloads
@@ -1124,6 +1178,12 @@ RESPONSE STYLE:
                                 f"[Tool Result for: {command}]\n{perm_msg}\n"
                                 "The user declined this action. Try a different approach or ask for guidance."
                             )
+                            # DEF-M09-1: Persist permission denials to JSONL audit trail
+                            self.logger.log_event("permission_denied", "CYRAX", {
+                                "command": command[:200],
+                                "reason": perm_reason,
+                                "action_type": self.permission_gate.classify_action(command),
+                            })
                             continue
 
                         # Fix browser.type -> type_text mapping
@@ -1134,6 +1194,7 @@ RESPONSE STYLE:
                         method = getattr(self.browser, actual_method_name, None)
                         if method:
                             try:
+                                self._actions_executed_this_turn += 1
                                 with display.get_spinner("Executing..."):
                                     br_result = method(*args, **kwargs)
                                 display.show_tool_output("CYRAX", br_result.output)
@@ -1197,6 +1258,12 @@ RESPONSE STYLE:
                             scope_msg = f"[Scope Violation] {scope_reason}"
                             display.show_tool_output("CYRAX", scope_msg)
                             action_results.append(f"[Tool Result for: {command}]\n{scope_msg}")
+                            # DEF-M09-1: Persist scope violations to JSONL audit trail
+                            self.logger.log_event("scope_violation", "CYRAX", {
+                                "command": command[:200],
+                                "reason": scope_reason,
+                                "action_type": "shell_command",
+                            })
                             continue
 
                         # Permission check
@@ -1205,8 +1272,15 @@ RESPONSE STYLE:
                             perm_msg = f"[Permission Denied] {perm_reason}"
                             display.show_tool_output("CYRAX", perm_msg)
                             action_results.append(f"[Tool Result for: {command}]\n{perm_msg}")
+                            # DEF-M09-1: Persist permission denials to JSONL audit trail
+                            self.logger.log_event("permission_denied", "CYRAX", {
+                                "command": command[:200],
+                                "reason": perm_reason,
+                                "action_type": self.permission_gate.classify_action(command),
+                            })
                             continue
 
+                        self._actions_executed_this_turn += 1
                         with display.get_spinner("Executing..."):
                             result = self.tools.execute_raw(command)
                         display.show_tool_output("CYRAX", result.output)
@@ -1240,10 +1314,12 @@ RESPONSE STYLE:
             elif action_type == "spawn":
                 agent_type = match.group(1)
                 task = match.group(2).strip()
+                self._actions_executed_this_turn += 1
                 report = self._spawn_and_run_agent(agent_type, task)
                 if report:
                     if report.get("status") == "spawned":
                         # Non-blocking: agent is running in background
+                        self._cmds_succeeded_this_turn += 1
                         action_results.append(
                             f"[Agent {report['agent_id']} Spawned]\n"
                             f"Status: running in background (PID will be assigned)\n"
@@ -1256,6 +1332,7 @@ RESPONSE STYLE:
                             f"[Agent Spawn Skipped]\nSummary: {report['summary']}"
                         )
                     else:
+                        self._cmds_succeeded_this_turn += 1
                         action_results.append(
                             f"[Agent {report['agent_id']} Report]\n"
                             f"Status: {report['status']}\n"
@@ -1318,8 +1395,10 @@ RESPONSE STYLE:
                     target_url_host=self.campaign.target,
                 )
                 self.logger.log_finding("CYRAX", severity, title, details)
+                # DEF-M08-4: Let add_vuln() apply its own 200-char cap;
+                # previously we passed details[:100] which caused double-truncation.
                 self.mission.add_vuln(title, url=self.campaign.target,
-                                      evidence=details[:100])
+                                      evidence=details)
 
         return action_results
 
@@ -1527,9 +1606,12 @@ RESPONSE STYLE:
         summary = report.get("summary", "No summary")
         findings = report.get("findings", [])
 
+        # Include accurate remaining-agent count in the completion message
+        remaining = max(0, self.agent_pool.active_count() - 1)
+        remaining_str = f", {remaining} still active" if remaining > 0 else ""
         display.show_info(
             f"Agent {agent_id} completed ({status}): "
-            f"{len(findings)} findings. {summary[:120]}"
+            f"{len(findings)} findings{remaining_str}. {summary[:120]}"
         )
 
         # Store the report
@@ -1825,42 +1907,71 @@ RESPONSE STYLE:
         return None
 
     def _export_findings(self):
-        """Export findings to a markdown report file."""
+        """Export findings to a markdown and JSON report file.
+
+        DEF-M08-2: Include the evidence field in exported reports.
+        DEF-M08-3: Also write cyrax_report.json for CI/XBOW integration.
+        """
+        import json as _json
         findings = self.knowledge.get_findings()
         if not findings:
             display.show_info("No findings to export.")
             return
 
         report_path = self.tools.executor.work_dir / "cyrax_report.md"
+        json_path = self.tools.executor.work_dir / "cyrax_report.json"
+
+        # ── Markdown export ──────────────────────────────────────────────────
         lines = [
-            f"# CYRAX Security Assessment Report",
-            f"",
+            "# CYRAX Security Assessment Report",
+            "",
             f"**Target:** {self.campaign.target or 'N/A'}",
             f"**Campaign:** {self._campaign_name or 'N/A'}",
             f"**Findings:** {len(findings)}",
-            f"",
-            f"---",
-            f"",
+            "",
+            "---",
+            "",
         ]
         for i, f in enumerate(findings, 1):
+            evidence_text = f.get("evidence", "") or ""
             lines.extend([
                 f"## {i}. [{f['severity'].upper()}] {f['title']}",
-                f"",
+                "",
                 f"- ID: {f.get('id', 'N/A')}",
                 f"- Timestamp: {f.get('stored_at', 'N/A')}",
                 f"- Agent: {f.get('agent_id', 'N/A') or 'N/A'}",
                 f"- Target: {f.get('target_url_host', f.get('target', 'N/A')) or 'N/A'}",
                 f"- Command/Action ID: {f.get('command_action_id', 'N/A') or 'N/A'}",
                 f"- Output Ref: {f.get('raw_output_ref', 'N/A') or 'N/A'}",
-                f"",
-                f"{f['description']}",
-                f"",
-                f"---",
-                f"",
+                "",
+                f['description'],
             ])
+            if evidence_text:
+                lines.extend([
+                    "",
+                    "**Evidence:**",
+                    "```",
+                    evidence_text,
+                    "```",
+                ])
+            lines.extend(["", "---", ""])
 
-        report_path.write_text("\n".join(lines))
-        display.show_success(f"Report exported to {report_path}")
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+
+        # ── JSON export (DEF-M08-3) ──────────────────────────────────────────
+        json_report = {
+            "target": self.campaign.target or "",
+            "campaign": self._campaign_name or "",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "finding_count": len(findings),
+            "findings": findings,
+        }
+        json_path.write_text(
+            _json.dumps(json_report, indent=2, default=str),
+            encoding="utf-8",
+        )
+
+        display.show_success(f"Report exported: {report_path} and {json_path}")
 
     def _threaded_chat(self, user_input: str):
         """Run chat in a thread. Stores result/error for the main thread."""
@@ -1995,8 +2106,10 @@ RESPONSE STYLE:
 
             turn_count += 1
 
-            # Track actions for auto-continue
+            # Track actions for auto-continue (cap to last 50 to prevent unbounded growth)
             self._turn_action_counts.append(self._actions_executed_this_turn)
+            if len(self._turn_action_counts) > 50:
+                self._turn_action_counts = self._turn_action_counts[-50:]
             if self._actions_executed_this_turn == 0:
                 self._consecutive_empty_turns += 1
             else:

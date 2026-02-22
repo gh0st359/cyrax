@@ -22,19 +22,19 @@ from typing import Optional
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agents.ipc import IPCClient, IPCMessage
-from agents.recon_agent import ReconAgent
-from agents.exploit_agent import ExploitAgent
-from agents.post_exploit_agent import PostExploitAgent
-from agents.ad_agent import ActiveDirectoryAgent
-from agents.web_agent import WebAgent
-from agents.cloud_agent import CloudAgent
-from agents.osint_agent import OSINTAgent
-from models.model_manager import ModelManager
-from tools.executor import ToolExecutor
-from tools.tool_registry import ToolRegistry
-from utils.safety import ScopeEnforcer, classify_action
-from utils.logging import init_logger
+from agents.ipc import IPCClient, IPCMessage  # noqa: E402
+from agents.recon_agent import ReconAgent  # noqa: E402
+from agents.exploit_agent import ExploitAgent  # noqa: E402
+from agents.post_exploit_agent import PostExploitAgent  # noqa: E402
+from agents.ad_agent import ActiveDirectoryAgent  # noqa: E402
+from agents.web_agent import WebAgent  # noqa: E402
+from agents.cloud_agent import CloudAgent  # noqa: E402
+from agents.osint_agent import OSINTAgent  # noqa: E402
+from models.model_manager import ModelManager  # noqa: E402
+from tools.executor import ToolExecutor  # noqa: E402
+from tools.tool_registry import ToolRegistry  # noqa: E402
+from utils.safety import ScopeEnforcer, classify_action  # noqa: E402
+from utils.logging import init_logger  # noqa: E402
 
 
 AGENT_CLASSES = {
@@ -270,7 +270,6 @@ class AgentProcessRunner:
         agent.ipc_client = self.ipc
 
         return agent
-
 
     def _reconnect_manifest_path(self) -> Path:
         return Path(self.log_file).parent / f"{self.agent_id}_reconnect.json"

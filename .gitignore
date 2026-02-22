@@ -34,6 +34,12 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # Environment
 .env
 .env.local

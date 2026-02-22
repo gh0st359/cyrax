@@ -1,6 +1,9 @@
+import pytest
+
 from tools import executor as executor_module
 
 
+@pytest.mark.unit
 def test_adapt_windows_grep_pipe_basic(monkeypatch):
     monkeypatch.setattr(executor_module, "IS_WINDOWS", True)
     cmd = "curl -I https://example.com 2>&1 | grep ^HTTP"
@@ -10,6 +13,7 @@ def test_adapt_windows_grep_pipe_basic(monkeypatch):
     assert '/C:"^HTTP"' in adapted
 
 
+@pytest.mark.unit
 def test_adapt_windows_grep_pipe_ignore_case(monkeypatch):
     monkeypatch.setattr(executor_module, "IS_WINDOWS", True)
     cmd = "curl -sIk https://example.com | grep -i 'server:'"
@@ -19,6 +23,7 @@ def test_adapt_windows_grep_pipe_ignore_case(monkeypatch):
     assert '/C:"server:"' in adapted
 
 
+@pytest.mark.unit
 def test_adapt_windows_filter_noop_on_non_windows(monkeypatch):
     monkeypatch.setattr(executor_module, "IS_WINDOWS", False)
     cmd = "curl -I https://example.com 2>&1 | grep ^HTTP"

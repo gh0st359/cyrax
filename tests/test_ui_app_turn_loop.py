@@ -1,6 +1,8 @@
 import sys
 import unittest
 
+import pytest
+
 from ui import app as app_module
 
 
@@ -77,6 +79,7 @@ class _FakeApp:
         return fn(*args, **kwargs)
 
 
+@pytest.mark.integration
 @unittest.skipUnless(
     hasattr(app_module, "CyraxApp") and hasattr(app_module.CyraxApp, "_run_ai_turn_loop"),
     "Textual app implementation not available",

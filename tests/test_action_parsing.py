@@ -1,6 +1,9 @@
+import pytest
+
 from cyrax import _find_all_actions
 
 
+@pytest.mark.unit
 def test_find_all_actions_parses_execute_spawn_and_write_file_in_order():
     response = """
 Plan:

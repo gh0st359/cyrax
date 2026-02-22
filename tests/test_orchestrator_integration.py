@@ -1,3 +1,4 @@
+import pytest
 
 import cyrax
 from tools.executor import CommandResult
@@ -28,6 +29,7 @@ class DummyAgentPool:
         return None
 
 
+@pytest.mark.integration
 def test_orchestrator_one_turn_executes_action_and_processes_followup(monkeypatch, tmp_path):
     monkeypatch.setattr(cyrax, "ModelManager", DummyModelManager)
     monkeypatch.setattr(cyrax, "SubprocessAgentPool", DummyAgentPool)

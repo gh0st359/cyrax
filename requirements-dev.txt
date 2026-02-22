@@ -1,0 +1,17 @@
+# CYRAX - Development and Test Dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Core runtime (inherit)
+-r requirements.txt
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+pytest-timeout>=2.2.0
+
+# Linting
+flake8>=6.0.0
+
+# Type checking (optional but recommended)
+mypy>=1.0.0

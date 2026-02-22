@@ -4,7 +4,6 @@ Comprehensive engagement logging for red team operations.
 """
 
 import logging
-import os
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,9 +28,9 @@ class EngagementLogger:
         self.logger.setLevel(getattr(logging, level.upper(), logging.INFO))
         self.logger.handlers.clear()
 
-        # File handler for detailed logs
+        # File handler for detailed logs (explicit utf-8 prevents Windows cp1252 crash)
         log_file = self.log_dir / f"cyrax_{timestamp}.log"
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter(
             "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
@@ -46,9 +45,9 @@ class EngagementLogger:
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
 
-        # Structured engagement log (JSON lines)
+        # Structured engagement log (JSON lines) — utf-8 for Windows compatibility
         self.engagement_log_path = self.log_dir / f"engagement_{timestamp}.jsonl"
-        self._engagement_file = open(self.engagement_log_path, "a")
+        self._engagement_file = open(self.engagement_log_path, "a", encoding="utf-8")
 
         self.logger.info(f"CYRAX session started: {self.session_id}")
 

@@ -435,7 +435,20 @@ class PermissionGate:
         return self._prompt_user(action_type, command)
 
     def _prompt_user(self, action_type: str, command: str) -> tuple[bool, str]:
-        """Prompt the user for permission."""
+        """Prompt the user for permission.
+
+        Non-interactive guard: if stdin is not a TTY (pipe, CI, script) we must
+        never call input() as it will deadlock waiting for a response that never
+        comes.  In non-interactive contexts the safe default is to deny.
+        """
+        import sys
+        if not sys.stdin.isatty():
+            return False, (
+                f"Action '{action_type}' requires interactive confirmation but stdin is not a TTY. "
+                "Run with auto_approve=True or use --auto flag to pre-approve actions in "
+                "non-interactive mode."
+            )
+
         short_cmd = command[:120] + "..." if len(command) > 120 else command
         display.console.print()
         display.console.print(
@@ -482,3 +495,19 @@ class PermissionGate:
         """Pre-approve a category of actions."""
         if category in self.ACTIONS:
             self.session_approvals[category] = "allow"
+
+    @property
+    def policy_mode(self) -> str:
+        """DEF-M09-2: Observable policy mode string for audit logs and diagnostics.
+
+        Returns:
+            "auto"        — auto_approve is True; no prompts, all actions allowed
+            "interactive" — TTY is available; user can be prompted
+            "ci"          — non-interactive (no TTY); dangerous actions auto-denied
+        """
+        import sys
+        if self.auto_approve:
+            return "auto"
+        if sys.stdin.isatty():
+            return "interactive"
+        return "ci"

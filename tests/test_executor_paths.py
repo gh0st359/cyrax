@@ -1,6 +1,9 @@
+import pytest
+
 from tools.executor import ToolExecutor
 
 
+@pytest.mark.unit
 def test_write_and_read_allowed_relative_path(tmp_path):
     executor = ToolExecutor(work_dir=str(tmp_path))
 
@@ -12,6 +15,7 @@ def test_write_and_read_allowed_relative_path(tmp_path):
     assert read_result.stdout == "hello"
 
 
+@pytest.mark.unit
 def test_rejects_parent_traversal_path(tmp_path):
     executor = ToolExecutor(work_dir=str(tmp_path))
 
@@ -24,6 +28,7 @@ def test_rejects_parent_traversal_path(tmp_path):
     assert "Rejected path outside work directory" in read_result.stderr
 
 
+@pytest.mark.unit
 def test_rejects_absolute_path(tmp_path):
     executor = ToolExecutor(work_dir=str(tmp_path))
 

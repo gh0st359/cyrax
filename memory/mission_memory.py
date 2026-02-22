@@ -76,7 +76,7 @@ class MissionMemory:
         self.working = {
             "credentials": [],       # [{"user", "password", "target", "source"}]
             "confirmed_vulns": [],   # [{"type", "url", "evidence", "timestamp"}]
-            "compromised_hosts": [], # ["host1", "host2"]
+            "compromised_hosts": [],  # ["host1", "host2"]
             "browser_state": {},     # {"url", "cookies", "authenticated"}
             "attack_progress": [],   # ["Logged in with admin:password", ...]
             "active_agents": {},     # {agent_id: {"type", "task", "status"}}
@@ -88,7 +88,7 @@ class MissionMemory:
         self.episodic = {
             "session_facts": [],     # Extracted from conversation turns
             "decisions_made": [],    # Key strategic decisions
-            "failed_approaches": [], # What didn't work (avoid repetition)
+            "failed_approaches": [],  # What didn't work (avoid repetition)
         }
 
     # === Core Memory ===
@@ -106,8 +106,10 @@ class MissionMemory:
     def detect_target_type(target: str) -> str:
         """Infer engagement type from the target string."""
         t = target.lower()
-        if any(x in t for x in ("http://", "https://", "/dvwa", "/wp-",
-                                 ".php", ".asp", ".aspx", ".jsp")):
+        if any(x in t for x in (
+            "http://", "https://", "/dvwa", "/wp-",
+            ".php", ".asp", ".aspx", ".jsp"
+        )):
             return "web_app"
         # CIDR notation
         if "/" in t:
@@ -268,18 +270,18 @@ class MissionMemory:
                 lines.append(f"  Cookies: {cookie_str}")
 
         if self.working["attack_progress"]:
-            lines.append(f"\nPROGRESS:")
+            lines.append("\nPROGRESS:")
             for step in self.working["attack_progress"][-10:]:
                 lines.append(f"  - {step}")
 
         if self.working["key_discoveries"]:
-            lines.append(f"\nDISCOVERIES:")
+            lines.append("\nDISCOVERIES:")
             for d in self.working["key_discoveries"][-10:]:
                 lines.append(f"  - {d}")
 
         # Episodic
         if self.episodic["failed_approaches"]:
-            lines.append(f"\nFAILED APPROACHES (do NOT repeat):")
+            lines.append("\nFAILED APPROACHES (do NOT repeat):")
             for f in self.episodic["failed_approaches"][-10:]:
                 lines.append(f"  - {f}")
 
@@ -337,7 +339,7 @@ class MissionMemory:
 
         # Known credentials
         if self.working["credentials"]:
-            lines.append(f"\nKnown credentials:")
+            lines.append("\nKnown credentials:")
             for c in self.working["credentials"]:
                 lines.append(
                     f"  {c['user']}:{c['password'] or '***'} @ {c['target'] or 'N/A'}"
@@ -345,17 +347,17 @@ class MissionMemory:
 
         # Confirmed vulns
         if self.working["confirmed_vulns"]:
-            lines.append(f"\nConfirmed vulnerabilities:")
+            lines.append("\nConfirmed vulnerabilities:")
             for v in self.working["confirmed_vulns"][-5:]:
                 lines.append(f"  [{v['type']}] {v['url']}")
 
         # Browser state — critical for web-testing agents
         bs = self.working["browser_state"]
         if bs.get("url"):
-            lines.append(f"\nBrowser state:")
+            lines.append("\nBrowser state:")
             lines.append(f"  Current URL: {bs['url']}")
             if bs.get("authenticated"):
-                lines.append(f"  Authenticated: Yes")
+                lines.append("  Authenticated: Yes")
             if bs.get("cookies"):
                 cookie_str = "; ".join(
                     f"{c['name']}={c['value']}" for c in bs["cookies"][:10]
@@ -367,25 +369,25 @@ class MissionMemory:
 
         # Attack progress
         if self.working["attack_progress"]:
-            lines.append(f"\nCompleted so far:")
+            lines.append("\nCompleted so far:")
             for step in self.working["attack_progress"][-5:]:
                 lines.append(f"  - {step}")
 
         # Key discoveries
         if self.working["key_discoveries"]:
-            lines.append(f"\nKey discoveries:")
+            lines.append("\nKey discoveries:")
             for d in self.working["key_discoveries"][-5:]:
                 lines.append(f"  - {d}")
 
         # Failed approaches
         if self.episodic["failed_approaches"]:
-            lines.append(f"\nApproaches already tried and failed (avoid):")
+            lines.append("\nApproaches already tried and failed (avoid):")
             for f in self.episodic["failed_approaches"][-5:]:
                 lines.append(f"  - {f}")
 
         # Files available
         if self.working["files_created"]:
-            lines.append(f"\nFiles in workspace:")
+            lines.append("\nFiles in workspace:")
             for fp in self.working["files_created"][-10:]:
                 lines.append(f"  - {fp}")
 
@@ -441,8 +443,10 @@ class MissionMemory:
                 for c in cookies[:15]
             ]
             authenticated = any(
-                c["name"].lower() in ("phpsessid", "session", "sessionid",
-                                       "auth", "token", "jwt", "sid")
+                c["name"].lower() in (
+                    "phpsessid", "session", "sessionid",
+                    "auth", "token", "jwt", "sid"
+                )
                 for c in cookies
             )
             self.update_browser_state(url, simple_cookies, authenticated)
