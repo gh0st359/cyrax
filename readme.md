@@ -16,7 +16,7 @@ python -m pip install -r requirements.txt
 python -m pip install playwright && playwright install chromium
 
 # First time? Run setup to configure your model provider
-python cyrax.py --setup
+python cyrax.py init
 
 # After that, just type:
 python cyrax.py
@@ -30,7 +30,7 @@ If you prefer a system-wide `cyrax` command:
 pip install .
 
 # Then just run:
-cyrax --setup   # first time
+cyrax init      # first time
 cyrax            # after that
 ```
 
@@ -41,6 +41,23 @@ cyrax            # after that
 export ANTHROPIC_API_KEY="your-key-here"
 python cyrax.py
 ```
+
+## CLI
+
+CYRAX now uses an assistant-ui-inspired command layout for setup, discovery,
+and updates while preserving the original `cyrax` chat entry point.
+
+```bash
+cyrax init
+cyrax configure --provider anthropic --api-key-env ANTHROPIC_API_KEY
+cyrax status --show-config
+cyrax tools --available
+cyrax preflight
+cyrax chat --scope example-company.com --campaign example
+```
+
+Top-level chat flags such as `--setup`, `--campaign`, `--scope`, `--auto`,
+`--tui`, and `--simple` continue to work for backwards compatibility.
 
 ## How It Works
 

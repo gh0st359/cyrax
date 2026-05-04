@@ -20,6 +20,7 @@ import threading
 import string
 import time
 import importlib.resources
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,8 @@ if _missing:
     sys.exit(1)
 
 import yaml  # noqa: E402
+from rich import box  # noqa: E402
+from rich.table import Table  # noqa: E402
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -98,6 +101,35 @@ _ORCHESTRATOR_REQUIRED_PLACEHOLDERS = {
     "available_tools",
 }
 
+_API_MODEL_PROVIDERS = {"anthropic", "openai", "google", "xai"}
+_LOCAL_MODEL_PROVIDERS = {"ollama", "lmstudio", "vllm"}
+_MODEL_PROVIDERS = sorted(_API_MODEL_PROVIDERS | _LOCAL_MODEL_PROVIDERS | {"custom"})
+_PROVIDER_ENV_VARS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "xai": "XAI_API_KEY",
+    "custom": "CYRAX_API_KEY",
+    "vllm": "VLLM_API_KEY",
+}
+_PROVIDER_DEFAULT_MODELS = {
+    "anthropic": "claude-sonnet-4-20250514",
+    "openai": "gpt-4o",
+    "google": "gemini-1.5-pro",
+    "xai": "grok-2",
+    "ollama": "llama3.1:70b",
+    "lmstudio": "local-model",
+    "vllm": "local-model",
+    "custom": "custom-model",
+}
+_API_KEY_PLACEHOLDERS = {
+    "",
+    "YOUR_API_KEY_HERE",
+    "your-key-here",
+    "sk-xxxxx",
+    "xxxxx",
+}
+
 
 def _read_orchestrator_prompt_template() -> str:
     """Read orchestrator prompt template from source tree or installed package data."""
@@ -116,6 +148,118 @@ def _read_orchestrator_prompt_template() -> str:
             "Failed to locate orchestrator prompt template. Checked source path "
             f"{_ORCHESTRATOR_PROMPT_PATH} and package resource config/prompts/orchestrator.txt: {exc}"
         ) from exc
+
+
+@contextmanager
+def _working_directory(cwd: Optional[str]):
+    """Temporarily run a CLI subcommand from another working directory."""
+    if not cwd:
+        yield
+        return
+    original = Path.cwd()
+    target = Path(cwd).expanduser().resolve()
+    os.chdir(target)
+    try:
+        yield
+    finally:
+        os.chdir(original)
+
+
+def _is_missing_api_key(api_key: str) -> bool:
+    """Return True when an API key is empty or still a documented placeholder."""
+    return api_key.strip() in _API_KEY_PLACEHOLDERS
+
+
+def _deep_merge_config(base: dict, override: dict) -> dict:
+    """Merge user configuration over defaults while preserving nested defaults."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict):
+            base_value = merged.get(key, {})
+            if not isinstance(base_value, dict):
+                base_value = {}
+            merged[key] = _deep_merge_config(base_value, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _default_config() -> dict:
+    """Return the default CYRAX configuration."""
+    return {
+        "model": {
+            "provider": "anthropic",
+            "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
+            "model_name": "claude-sonnet-4-20250514",
+            "temperature": 0.7,
+            "max_tokens": 4096,
+        },
+        "tools": {
+            "timeout": 300,
+            "allow_dangerous": False,
+            "work_dir": get_default_work_dir(),
+        },
+        "memory": {
+            "db_path": "data/cyrax.db",
+            "max_history": 50,
+        },
+        "logging": {
+            "log_dir": "logs",
+            "level": "INFO",
+        },
+        "display": {
+            "show_reasoning": True,
+            "theme": "dark",
+        },
+        "safety": {
+            "auto_approve": False,
+        },
+        "campaign": {
+            "max_depth": 8,
+            "data_dir": "data/campaigns",
+            "status_interval": 5,
+        },
+    }
+
+
+def _apply_env_model_defaults(config: dict) -> dict:
+    """Fill missing model keys from provider defaults and environment variables."""
+    model = config.setdefault("model", {})
+    provider = model.get("provider") or "anthropic"
+    model["provider"] = provider
+    provider_default_model = _PROVIDER_DEFAULT_MODELS.get(provider, "")
+    current_model = str(model.get("model_name", "") or "")
+    if (
+        not current_model
+        or current_model in _PROVIDER_DEFAULT_MODELS.values()
+        and current_model != provider_default_model
+    ):
+        model["model_name"] = provider_default_model
+    model.setdefault("temperature", 0.7)
+    model.setdefault("max_tokens", 4096)
+
+    env_var = _PROVIDER_ENV_VARS.get(provider, "")
+    api_key = str(model.get("api_key", "") or "")
+    if env_var and _is_missing_api_key(api_key):
+        env_value = os.environ.get(env_var, "")
+        if env_value:
+            model["api_key"] = env_value
+
+    if provider == "ollama":
+        model.setdefault("api_url", "http://localhost:11434")
+    elif provider == "lmstudio":
+        model.setdefault("api_url", "http://localhost:1234/v1")
+    return config
+
+
+def _redact_config(config: dict) -> dict:
+    """Return a copy of config that is safe to print."""
+    redacted = _deep_merge_config({}, config)
+    model = redacted.get("model", {})
+    api_key = str(model.get("api_key", "") or "")
+    if api_key and not _is_missing_api_key(api_key):
+        model["api_key"] = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else "***"
+    return redacted
 
 
 def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
@@ -2159,8 +2303,9 @@ RESPONSE STYLE:
 
 def load_config(config_path: Optional[str] = None) -> dict:
     """Load configuration from YAML file."""
+    defaults = _default_config()
     if config_path:
-        path = Path(config_path)
+        path = Path(config_path).expanduser()
     else:
         candidates = [
             Path("config/config.yaml"),
@@ -2174,37 +2319,22 @@ def load_config(config_path: Optional[str] = None) -> dict:
                 break
 
     if path and path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f)
+        with open(path, encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+        if not isinstance(loaded, dict):
+            raise ValueError(f"Config file {path} must contain a YAML mapping")
+        return _apply_env_model_defaults(_deep_merge_config(defaults, loaded))
 
-    return {
-        "model": {
-            "provider": "anthropic",
-            "api_key": os.environ.get("ANTHROPIC_API_KEY", ""),
-            "model_name": "claude-sonnet-4-20250514",
-            "temperature": 0.7,
-            "max_tokens": 4096,
-        },
-        "tools": {
-            "timeout": 300,
-            "allow_dangerous": False,
-            "work_dir": get_default_work_dir(),
-        },
-        "memory": {
-            "db_path": "data/cyrax.db",
-            "max_history": 50,
-        },
-        "logging": {
-            "log_dir": "logs",
-            "level": "INFO",
-        },
-        "display": {
-            "show_reasoning": True,
-        },
-        "safety": {
-            "auto_approve": False,
-        },
-    }
+    return _apply_env_model_defaults(defaults)
+
+
+def save_config(config: dict, config_path: Optional[str] = None) -> Path:
+    """Save configuration to a YAML file and return the written path."""
+    path = Path(config_path).expanduser() if config_path else Path("config/config.yaml")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+    return path
 
 
 def setup_interactive(config: dict) -> dict:
@@ -2217,41 +2347,31 @@ def setup_interactive(config: dict) -> dict:
 
     provider = Prompt.ask(
         "Select model provider",
-        choices=["anthropic", "openai", "google", "xai", "ollama", "lmstudio", "custom"],
+        choices=_MODEL_PROVIDERS,
         default="anthropic",
     )
     config["model"]["provider"] = provider
 
-    if provider in ("anthropic", "openai", "google", "xai"):
-        env_var_map = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "xai": "XAI_API_KEY",
-        }
-        env_key = os.environ.get(env_var_map.get(provider, ""), "")
+    if provider in _API_MODEL_PROVIDERS:
+        env_var = _PROVIDER_ENV_VARS[provider]
+        env_key = os.environ.get(env_var, "")
         if env_key:
-            console.print(f"[green]Found API key in environment ({env_var_map[provider]})[/green]")
+            console.print(f"[green]Found API key in environment ({env_var})[/green]")
             config["model"]["api_key"] = env_key
         else:
             api_key = Prompt.ask(f"Enter {provider} API key")
             config["model"]["api_key"] = api_key
 
-        default_models = {
-            "anthropic": "claude-sonnet-4-20250514",
-            "openai": "gpt-4o",
-            "google": "gemini-1.5-pro",
-            "xai": "grok-2",
-        }
         model_name = Prompt.ask(
-            "Model name", default=default_models.get(provider, "")
+            "Model name", default=_PROVIDER_DEFAULT_MODELS.get(provider, "")
         )
         config["model"]["model_name"] = model_name
 
-    elif provider in ("ollama", "lmstudio"):
+    elif provider in _LOCAL_MODEL_PROVIDERS:
         default_urls = {
             "ollama": "http://localhost:11434",
             "lmstudio": "http://localhost:1234/v1",
+            "vllm": "http://localhost:8000/v1",
         }
         api_url = Prompt.ask(
             "API URL", default=default_urls[provider]
@@ -2260,7 +2380,7 @@ def setup_interactive(config: dict) -> dict:
 
         model_name = Prompt.ask(
             "Model name",
-            default="llama3.1:70b" if provider == "ollama" else "local-model",
+            default=_PROVIDER_DEFAULT_MODELS.get(provider, "local-model"),
         )
         config["model"]["model_name"] = model_name
 
@@ -2273,17 +2393,240 @@ def setup_interactive(config: dict) -> dict:
         config["model"]["model_name"] = model_name
 
     if Confirm.ask("Save configuration to config/config.yaml?", default=True):
-        config_dir = Path("config")
-        config_dir.mkdir(exist_ok=True)
-        config_path = config_dir / "config.yaml"
-        with open(config_path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False)
+        config_path = save_config(config)
         console.print(f"[green]Config saved to {config_path}[/green]")
 
     return config
 
 
-def main():
+def configure_cli(args: argparse.Namespace) -> int:
+    """Configure CYRAX non-interactively from CLI flags."""
+    config = load_config(args.config)
+    model = config.setdefault("model", {})
+
+    if args.provider:
+        model["provider"] = args.provider
+    provider = model.get("provider", "anthropic")
+    if provider not in _MODEL_PROVIDERS:
+        display.show_error(f"Unsupported provider: {provider}")
+        return 2
+
+    if args.model:
+        model["model_name"] = args.model
+    else:
+        model.setdefault("model_name", _PROVIDER_DEFAULT_MODELS.get(provider, ""))
+
+    if args.api_url:
+        model["api_url"] = args.api_url
+
+    env_var = _PROVIDER_ENV_VARS.get(provider, "")
+    if args.api_key_env:
+        env_var = args.api_key_env
+    if args.api_key:
+        model["api_key"] = args.api_key
+    elif env_var and os.environ.get(env_var):
+        model["api_key"] = os.environ[env_var]
+
+    if provider in _API_MODEL_PROVIDERS | {"custom"} and _is_missing_api_key(
+        str(model.get("api_key", "") or "")
+    ):
+        hint = f" Set {env_var} or pass --api-key." if env_var else " Pass --api-key."
+        display.show_error(f"Missing API key for provider '{provider}'.{hint}")
+        return 2
+
+    path = save_config(config, args.output or args.config)
+    display.show_success(f"Configuration saved to {path}")
+    return 0
+
+
+def status_cli(args: argparse.Namespace) -> int:
+    """Print current CYRAX configuration and runtime status."""
+    config = load_config(args.config)
+    model = config.get("model", {})
+    provider = model.get("provider", "")
+    api_key = str(model.get("api_key", "") or "")
+    tools = ToolRegistry()
+    available = [tool for tool in tools.list_tools() if tool["available"]]
+
+    table = Table(
+        title="CYRAX Status",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Property", style="bold")
+    table.add_column("Value")
+    table.add_row("Provider", str(provider or "not configured"))
+    table.add_row("Model", str(model.get("model_name", "") or "not configured"))
+    table.add_row("API key", "configured" if not _is_missing_api_key(api_key) else "missing")
+    table.add_row("Tools", f"{len(available)}/{len(tools.tools)} available")
+    table.add_row("Work dir", str(config.get("tools", {}).get("work_dir", "")))
+    table.add_row("Auto approve", str(config.get("safety", {}).get("auto_approve", False)))
+    display.console.print(table)
+
+    if args.show_config:
+        display.console.print("\n[bold]Resolved config:[/bold]")
+        display.console.print(yaml.safe_dump(_redact_config(config), sort_keys=False))
+    return 0
+
+
+def tools_cli(args: argparse.Namespace) -> int:
+    """List registered tools and local availability."""
+    registry = ToolRegistry()
+    tools = registry.list_tools(category=args.category)
+    if args.available:
+        tools = [tool for tool in tools if tool["available"]]
+
+    table = Table(
+        title="CYRAX Tools",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Name", style="bold")
+    table.add_column("Category")
+    table.add_column("Available")
+    table.add_column("Description")
+    for tool in tools:
+        table.add_row(
+            tool["name"],
+            tool["category"],
+            "yes" if tool["available"] else "no",
+            tool["description"],
+        )
+    display.console.print(table)
+    return 0
+
+
+def preflight_cli(_args: argparse.Namespace) -> int:
+    """Run environment checks from the primary CLI."""
+    import platform
+    import shutil
+    import subprocess as _sp
+
+    required_modules = [
+        ("rich", "rich"),
+        ("yaml", "pyyaml"),
+        ("httpx", "httpx"),
+    ]
+    optional_modules = [
+        ("openai", "openai"),
+        ("anthropic", "anthropic"),
+        ("google.generativeai", "google-generativeai"),
+        ("playwright.sync_api", "playwright"),
+        ("textual", "textual"),
+        ("pytest", "pytest"),
+    ]
+    optional_tools = ["nmap", "sqlmap", "chromium", "chromium-browser"]
+
+    def check_module(import_name: str, package_name: str, required: bool) -> tuple[bool, str]:
+        try:
+            result = _sp.run(
+                [sys.executable, "-c", f"import {import_name}"],
+                capture_output=True,
+                timeout=10,
+            )
+        except _sp.TimeoutExpired:
+            label = "REQUIRED" if required else "optional"
+            return not required, f"import timed out ({label}): pip install {package_name}"
+        if result.returncode == 0:
+            return True, "installed"
+        stderr = result.stderr.decode(errors="replace")
+        label = "REQUIRED" if required else "optional"
+        if "ModuleNotFoundError" in stderr or "ImportError" in stderr:
+            return not required, f"NOT installed ({label}): pip install {package_name}"
+        short = stderr.splitlines()[-1][:80] if stderr.strip() else "import failed"
+        return not required, f"import error ({label}): {short}"
+
+    results: list[tuple[str, bool, str]] = []
+    print(f"=== CYRAX Preflight [{platform.system()} {platform.machine()}] ===\n")
+    print("Required packages:")
+    for import_name, package_name in required_modules:
+        ok, message = check_module(import_name, package_name, required=True)
+        results.append((package_name, ok, message))
+        print(f"  [{'OK' if ok else 'FAIL'}] {package_name}: {message}")
+
+    print("\nOptional packages:")
+    for import_name, package_name in optional_modules:
+        ok, message = check_module(import_name, package_name, required=False)
+        results.append((package_name, ok, message))
+        print(f"  [{'OK' if ok else 'miss'}] {package_name}: {message}")
+
+    print("\nOptional system tools:")
+    for tool in optional_tools:
+        print(f"  [info] {tool}: {shutil.which(tool) or 'not found (optional)'}")
+
+    failures = [result for result in results if not result[1]]
+    print(f"\nPreflight summary: {len(results) - len(failures)}/{len(results)} checks OK")
+    if failures:
+        print("\nFailed checks:")
+        for name, _ok, message in failures:
+            print(f"  - {name}: {message}")
+        print("\nPreflight FAILED — resolve the above before running CYRAX.")
+        return 1
+
+    print("\nPreflight PASSED — environment is ready.")
+    return 0
+
+
+def chat_cli(args: argparse.Namespace) -> int:
+    """Start the CYRAX chat runtime."""
+    config = load_config(args.config)
+
+    api_key = str(config.get("model", {}).get("api_key", "") or "")
+    provider = config.get("model", {}).get("provider", "")
+    needs_setup = (
+        args.setup
+        or (provider in _API_MODEL_PROVIDERS and _is_missing_api_key(api_key))
+    )
+
+    if needs_setup:
+        config = setup_interactive(config)
+
+    if not config.get("model", {}).get("provider"):
+        display.show_error(
+            "No model provider configured. Run `cyrax init` or create config/config.yaml"
+        )
+        return 1
+
+    if args.auto:
+        config.setdefault("safety", {})["auto_approve"] = True
+
+    cyrax = CyraxOrchestrator(config)
+    cyrax._max_response_depth = args.max_depth
+
+    if args.scope:
+        cyrax._configure_scope(args.scope)
+
+    if args.campaign:
+        cyrax.start_campaign(args.campaign, objective=args.objective)
+
+    use_tui = args.tui and not args.simple and sys.stdin.isatty()
+
+    try:
+        if use_tui:
+            try:
+                from ui.app import CyraxApp
+                app = CyraxApp(cyrax)
+                app.run()
+            except ImportError:
+                cyrax.run()
+        else:
+            cyrax.run()
+    except KeyboardInterrupt:
+        if cyrax._campaign_mode:
+            cyrax._mark_agents_orphaned_if_active()
+            cyrax._save_campaign_state()
+            display.show_cyrax_message("\nInterrupted. Campaign state saved.")
+        else:
+            display.show_cyrax_message("\nInterrupted. Ending session.")
+    finally:
+        cyrax.shutdown()
+    return 0
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Create the CYRAX command parser."""
     parser = argparse.ArgumentParser(
         description="CYRAX - Autonomous AI Red Team Operator"
     )
@@ -2293,9 +2636,85 @@ def main():
         help="Path to configuration file",
     )
     parser.add_argument(
+        "--cwd",
+        type=str,
+        help="Working directory for this command",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    init_parser = subparsers.add_parser(
+        "init",
+        help="run first-time interactive setup",
+        description="Initialize CYRAX configuration and provider settings",
+    )
+    init_parser.set_defaults(handler=lambda args: configure_init_cli(args))
+
+    configure_parser = subparsers.add_parser(
+        "configure",
+        aliases=["config"],
+        help="write provider settings non-interactively",
+        description="Configure model provider settings without prompts",
+    )
+    configure_parser.add_argument(
+        "--provider",
+        choices=_MODEL_PROVIDERS,
+        help="Model provider",
+    )
+    configure_parser.add_argument("--model", help="Model name")
+    configure_parser.add_argument("--api-key", help="API key for the provider")
+    configure_parser.add_argument(
+        "--api-key-env",
+        help="Environment variable to read the API key from",
+    )
+    configure_parser.add_argument("--api-url", help="Provider API URL")
+    configure_parser.add_argument(
+        "--output",
+        help="Config file to write (defaults to --config or config/config.yaml)",
+    )
+    configure_parser.set_defaults(handler=configure_cli)
+
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help="start the interactive operator session",
+        description="Start a CYRAX conversation",
+    )
+    _add_chat_arguments(chat_parser)
+    chat_parser.set_defaults(handler=chat_cli)
+
+    status_parser = subparsers.add_parser("status", help="show resolved runtime status")
+    status_parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Print redacted resolved configuration",
+    )
+    status_parser.set_defaults(handler=status_cli)
+
+    tools_parser = subparsers.add_parser("tools", help="list registered tools")
+    tools_parser.add_argument("--category", help="Filter by category")
+    tools_parser.add_argument(
+        "--available",
+        action="store_true",
+        help="Only show tools installed on this system",
+    )
+    tools_parser.set_defaults(handler=tools_cli)
+
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="check interpreter, packages, and local toolchain",
+    )
+    preflight_parser.set_defaults(handler=preflight_cli)
+
+    _add_chat_arguments(parser)
+    parser.set_defaults(handler=chat_cli)
+    return parser
+
+
+def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add shared chat runtime flags to a parser."""
+    parser.add_argument(
         "--setup",
         action="store_true",
-        help="Run interactive setup",
+        help="Run interactive setup before chat",
     )
     parser.add_argument(
         "--campaign",
@@ -2337,77 +2756,20 @@ def main():
         action="store_true",
         help="Force simple Rich console mode (no Textual TUI)",
     )
-    args = parser.parse_args()
 
+
+def configure_init_cli(args: argparse.Namespace) -> int:
+    """Run the interactive initializer as a subcommand."""
     config = load_config(args.config)
+    setup_interactive(config)
+    return 0
 
-    # Check if setup is needed
-    api_key = config.get("model", {}).get("api_key", "")
-    provider = config.get("model", {}).get("provider", "")
-    needs_setup = (
-        args.setup
-        or (provider in ("anthropic", "openai", "google", "xai") and not api_key)
-        and provider not in ("ollama", "lmstudio")
-    )
 
-    if needs_setup:
-        config = setup_interactive(config)
-
-    if not config.get("model", {}).get("provider"):
-        display.show_error(
-            "No model provider configured. Run with --setup or create config/config.yaml"
-        )
-        sys.exit(1)
-
-    # Apply auto-approve from CLI
-    if args.auto:
-        config.setdefault("safety", {})["auto_approve"] = True
-
-    # Start CYRAX
-    cyrax = CyraxOrchestrator(config)
-    cyrax._max_response_depth = args.max_depth
-
-    # Apply scope from CLI
-    if args.scope:
-        cyrax._configure_scope(args.scope)
-
-    if args.campaign:
-        cyrax.start_campaign(args.campaign, objective=args.objective)
-
-    # Use --tui to launch the Textual interactive TUI.
-    # Default is the Rich console mode (simple mode).
-    use_tui = args.tui and not args.simple and sys.stdin.isatty()
-
-    if use_tui:
-        try:
-            from ui.app import CyraxApp
-            app = CyraxApp(cyrax)
-            app.run()
-        except ImportError:
-            # Textual not installed — fall through to simple mode
-            try:
-                cyrax.run()
-            except KeyboardInterrupt:
-                if cyrax._campaign_mode:
-                    cyrax._mark_agents_orphaned_if_active()
-                    cyrax._save_campaign_state()
-                    display.show_cyrax_message("\nInterrupted. Campaign state saved.")
-                else:
-                    display.show_cyrax_message("\nInterrupted. Ending session.")
-            finally:
-                cyrax.shutdown()
-    else:
-        try:
-            cyrax.run()
-        except KeyboardInterrupt:
-            if cyrax._campaign_mode:
-                cyrax._mark_agents_orphaned_if_active()
-                cyrax._save_campaign_state()
-                display.show_cyrax_message("\nInterrupted. Campaign state saved.")
-            else:
-                display.show_cyrax_message("\nInterrupted. Ending session.")
-        finally:
-            cyrax.shutdown()
+def main():
+    parser = create_parser()
+    args = parser.parse_args()
+    with _working_directory(args.cwd):
+        sys.exit(args.handler(args))
 
 
 if __name__ == "__main__":

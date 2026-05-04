@@ -190,3 +190,40 @@ def test_cyrax_main_is_importable():
     import cyrax
     assert hasattr(cyrax, "main"), "cyrax module must expose a 'main' function"
     assert callable(cyrax.main)
+
+
+@pytest.mark.unit
+def test_cli_parser_exposes_subcommands():
+    """CYRAX CLI should expose setup/status/tooling subcommands."""
+    import cyrax
+
+    parser = cyrax.create_parser()
+    args = parser.parse_args(["status"])
+    assert args.command == "status"
+    assert callable(args.handler)
+
+    args = parser.parse_args(["configure", "--provider", "ollama", "--model", "llama3.1"])
+    assert args.command == "configure"
+    assert args.provider == "ollama"
+    assert args.model == "llama3.1"
+
+
+@pytest.mark.unit
+def test_load_config_merges_defaults_and_redacts_keys(tmp_path):
+    """Partial configs should inherit defaults and redact secrets for display."""
+    import cyrax
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model:\n"
+        "  provider: openai\n"
+        "  api_key: sk-test-secret\n",
+        encoding="utf-8",
+    )
+
+    config = cyrax.load_config(str(config_file))
+    assert config["model"]["model_name"] == "gpt-4o"
+    assert config["tools"]["timeout"] == 300
+
+    redacted = cyrax._redact_config(config)
+    assert redacted["model"]["api_key"] == "sk-t...cret"
