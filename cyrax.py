@@ -2520,11 +2520,15 @@ def preflight_cli(_args: argparse.Namespace) -> int:
     optional_tools = ["nmap", "sqlmap", "chromium", "chromium-browser"]
 
     def check_module(import_name: str, package_name: str, required: bool) -> tuple[bool, str]:
-        result = _sp.run(
-            [sys.executable, "-c", f"import {import_name}"],
-            capture_output=True,
-            timeout=10,
-        )
+        try:
+            result = _sp.run(
+                [sys.executable, "-c", f"import {import_name}"],
+                capture_output=True,
+                timeout=10,
+            )
+        except _sp.TimeoutExpired:
+            label = "REQUIRED" if required else "optional"
+            return not required, f"import timed out ({label}): pip install {package_name}"
         if result.returncode == 0:
             return True, "installed"
         stderr = result.stderr.decode(errors="replace")

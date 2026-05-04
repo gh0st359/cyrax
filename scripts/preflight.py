@@ -56,11 +56,19 @@ def check_module(import_name: str, package_name: str,
     from broken native extensions or Rust panics (e.g. google-generativeai).
     """
     import subprocess as _sp
-    result = _sp.run(
-        [sys.executable, "-c", f"import {import_name}"],
-        capture_output=True,
-        timeout=10,
-    )
+    try:
+        result = _sp.run(
+            [sys.executable, "-c", f"import {import_name}"],
+            capture_output=True,
+            timeout=10,
+        )
+    except _sp.TimeoutExpired:
+        label = "REQUIRED" if required else "optional"
+        return CheckResult(
+            package_name,
+            not required,
+            f"import timed out ({label}): pip install {package_name}",
+        )
     if result.returncode == 0:
         return CheckResult(package_name, True, "installed")
     stderr = result.stderr.decode(errors="replace")
