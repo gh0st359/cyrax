@@ -210,6 +210,9 @@ def _default_config() -> dict:
         "display": {
             "show_reasoning": True,
             "theme": "dark",
+            "streaming": True,
+            "stream_delay": 0.012,
+            "stream_chunk_size": 4,
         },
         "safety": {
             "auto_approve": False,
@@ -312,7 +315,7 @@ def _find_unclosed_tags(response: str) -> list[str]:
         if opens > closes:
             unclosed.append(
                 f"{tag_name} (opened {opens}x, closed {closes}x — "
-                f"missing [{'/'+tag_name}] closing tag)"
+                f"missing [/{tag_name}] closing tag)"
             )
     return unclosed
 
@@ -417,7 +420,13 @@ class CyraxOrchestrator:
         self._pending_permission_requests: dict[str, dict] = {}
 
         # Display config
-        self.show_reasoning = config.get("display", {}).get("show_reasoning", True)
+        display_config = config.get("display", {})
+        self.show_reasoning = display_config.get("show_reasoning", True)
+        display.configure_streaming(
+            enabled=display_config.get("streaming", True),
+            delay=display_config.get("stream_delay", 0.012),
+            chunk_size=display_config.get("stream_chunk_size", 4),
+        )
 
         # Iterative action loop limit
         self._max_response_depth = 8
@@ -977,19 +986,46 @@ RESPONSE STYLE:
                 self.logger.log_error("CYRAX", f"Follow-up generation failed: {e}")
                 break
         else:
-            # DEF-M07-4: Notify operator when depth limit is reached — previously
-            # this was logged silently, leaving the operator unaware the AI was spinning.
+            # Depth limit reached — generate a graceful wrap-up instead of
+            # an abrupt warning so the operator knows what was accomplished.
             self.logger.info(
                 f"Response processing depth limit reached ({self._max_response_depth})"
             )
-            display.show_warning(
-                f"Response depth limit reached ({self._max_response_depth} iterations). "
-                "The AI may be in a reasoning loop. Type a message to redirect, or /pause to stop."
+            wrap_up = self._generate_depth_limit_summary(accumulated)
+            display.show_depth_limit_summary(
+                actions_executed=self._actions_executed_this_turn,
+                commands_succeeded=self._cmds_succeeded_this_turn,
+                summary=wrap_up,
             )
 
         # Don't clear _consecutive_cmd_failures here — persist across the response loop
         # so the AI retains awareness of accumulated failures
         return accumulated
+
+    def _generate_depth_limit_summary(self, accumulated: str) -> str:
+        """Ask the model for a brief wrap-up when the action loop hits the depth limit."""
+        last_500 = accumulated[-500:] if len(accumulated) > 500 else accumulated
+        prompt = (
+            "The current action turn has reached its iteration limit. "
+            "Based on the work performed so far, write a concise 2-3 sentence "
+            "summary of what was accomplished and what remains. Do not include "
+            "any action blocks — only plain text."
+        )
+        try:
+            chunks = []
+            for chunk in self.model.generate_stream(
+                system=prompt,
+                messages=[{"role": "user", "content": last_500}],
+            ):
+                if chunk.get("done"):
+                    break
+                delta = chunk.get("delta", "")
+                if delta:
+                    chunks.append(delta)
+            return "".join(chunks).strip()
+        except Exception as exc:
+            self.logger.log_error("CYRAX", f"Wrap-up generation failed: {exc}")
+            return ""
 
     @staticmethod
     def _tokenize_text(text: str) -> set[str]:
