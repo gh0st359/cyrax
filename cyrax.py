@@ -211,14 +211,11 @@ def _default_config() -> dict:
             "show_reasoning": True,
             "theme": "dark",
             "streaming": True,
-            "stream_delay": 0.012,
-            "stream_chunk_size": 4,
         },
         "safety": {
             "auto_approve": False,
         },
         "campaign": {
-            "max_depth": 8,
             "data_dir": "data/campaigns",
             "status_interval": 5,
         },
@@ -422,14 +419,8 @@ class CyraxOrchestrator:
         # Display config
         display_config = config.get("display", {})
         self.show_reasoning = display_config.get("show_reasoning", True)
-        display.configure_streaming(
-            enabled=display_config.get("streaming", True),
-            delay=display_config.get("stream_delay", 0.012),
-            chunk_size=display_config.get("stream_chunk_size", 4),
-        )
+        display.configure_streaming(enabled=display_config.get("streaming", True))
 
-        # Iterative action loop limit
-        self._max_response_depth = 8
         self._consecutive_cmd_failures = 0
         self._failed_cmd_signatures: list[str] = []
         self._failed_pattern_counts: dict[str, int] = {}
@@ -842,7 +833,8 @@ RESPONSE STYLE:
         seen_hashes_this_turn: set[str] = set()
         echo_regens = 0
 
-        for depth in range(self._max_response_depth):
+        depth = 0
+        while True:
             # Check for pause request
             if self._pause_requested or self._hard_interrupt_requested:
                 self._pause_requested = False
@@ -967,6 +959,7 @@ RESPONSE STYLE:
                         self.logger.log_conversation("assistant", followup)
                         accumulated = f"{accumulated}\n\n{followup}"
                         current_response = followup
+                        depth += 1
                         continue
                     except Exception as e:
                         self.logger.log_error("CYRAX", f"Recovery generation failed: {e}")
@@ -982,50 +975,14 @@ RESPONSE STYLE:
                 self.logger.log_conversation("assistant", followup)
                 accumulated = f"{accumulated}\n\n{followup}"
                 current_response = followup
+                depth += 1
             except Exception as e:
                 self.logger.log_error("CYRAX", f"Follow-up generation failed: {e}")
                 break
-        else:
-            # Depth limit reached — generate a graceful wrap-up instead of
-            # an abrupt warning so the operator knows what was accomplished.
-            self.logger.info(
-                f"Response processing depth limit reached ({self._max_response_depth})"
-            )
-            wrap_up = self._generate_depth_limit_summary(accumulated)
-            display.show_depth_limit_summary(
-                actions_executed=self._actions_executed_this_turn,
-                commands_succeeded=self._cmds_succeeded_this_turn,
-                summary=wrap_up,
-            )
 
         # Don't clear _consecutive_cmd_failures here — persist across the response loop
         # so the AI retains awareness of accumulated failures
         return accumulated
-
-    def _generate_depth_limit_summary(self, accumulated: str) -> str:
-        """Ask the model for a brief wrap-up when the action loop hits the depth limit."""
-        last_500 = accumulated[-500:] if len(accumulated) > 500 else accumulated
-        prompt = (
-            "The current action turn has reached its iteration limit. "
-            "Based on the work performed so far, write a concise 2-3 sentence "
-            "summary of what was accomplished and what remains. Do not include "
-            "any action blocks — only plain text."
-        )
-        try:
-            chunks = []
-            for chunk in self.model.generate_stream(
-                system=prompt,
-                messages=[{"role": "user", "content": last_500}],
-            ):
-                if chunk.get("done"):
-                    break
-                delta = chunk.get("delta", "")
-                if delta:
-                    chunks.append(delta)
-            return "".join(chunks).strip()
-        except Exception as exc:
-            self.logger.log_error("CYRAX", f"Wrap-up generation failed: {exc}")
-            return ""
 
     @staticmethod
     def _tokenize_text(text: str) -> set[str]:
@@ -2179,7 +2136,6 @@ RESPONSE STYLE:
             display.show_cyrax_message(
                 f"Campaign '{self._campaign_name}' active. "
                 f"Objective: {self.campaign.objective or 'Not set'}\n"
-                f"Depth limit: {self._max_response_depth} iterations/turn. "
                 f"Use /pause to save and exit."
             )
         else:
@@ -2629,7 +2585,6 @@ def chat_cli(args: argparse.Namespace) -> int:
         config.setdefault("safety", {})["auto_approve"] = True
 
     cyrax = CyraxOrchestrator(config)
-    cyrax._max_response_depth = args.max_depth
 
     if args.scope:
         cyrax._configure_scope(args.scope)
@@ -2757,13 +2712,6 @@ def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
         type=str,
         metavar="NAME",
         help="Start or resume a named campaign",
-    )
-    parser.add_argument(
-        "--max-depth",
-        type=int,
-        default=8,
-        metavar="N",
-        help="Max action-loop iterations per turn (default: 8)",
     )
     parser.add_argument(
         "--objective",

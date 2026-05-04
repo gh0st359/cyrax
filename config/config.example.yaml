@@ -73,8 +73,6 @@ logging:
 
 # Campaign settings (for --campaign mode)
 campaign:
-  # Default max action-loop depth per turn (overridable with --max-depth)
-  max_depth: 8
   # Directory for campaign persistent data
   data_dir: "data/campaigns"
   # Auto-continue status report interval (every N turns)
@@ -84,6 +82,8 @@ campaign:
 display:
   # Show agent reasoning blocks
   show_reasoning: true
+  # Render assistant responses as live model chunks with a transient cursor
+  streaming: true
   # Show raw tool output
   show_raw_output: false
   # Color theme: dark, light
