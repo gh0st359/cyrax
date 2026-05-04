@@ -498,3 +498,32 @@ def prompt_user() -> str:
         return console.input("\n[bold white]> [/bold white]")
     except (EOFError, KeyboardInterrupt):
         return "exit"
+
+
+def show_depth_limit_summary(
+    actions_executed: int,
+    commands_succeeded: int,
+    summary: str,
+):
+    """Display a polished wrap-up panel when the action-loop depth limit is hit."""
+    stats_line = (
+        f"[bold]{actions_executed}[/bold] actions executed, "
+        f"[bold]{commands_succeeded}[/bold] succeeded"
+    )
+    body_parts = [stats_line, ""]
+    if summary:
+        body_parts.append(rich_escape(summary.strip()))
+        body_parts.append("")
+    body_parts.append(
+        "[dim]Send a follow-up message to continue, or type /pause to stop.[/dim]"
+    )
+    console.print()
+    console.print(
+        Panel(
+            "\n".join(body_parts),
+            title="[bold yellow]Turn Limit Reached[/bold yellow]",
+            border_style="yellow",
+            box=box.ROUNDED,
+            padding=(1, 2),
+        )
+    )

@@ -222,8 +222,14 @@ def test_depth_limit_warning_is_emitted(monkeypatch):
     """
     from utils import display as _display
 
-    warnings_shown = []
-    monkeypatch.setattr(_display, "show_warning", lambda msg: warnings_shown.append(msg))
+    summaries_shown = []
+    monkeypatch.setattr(
+        _display,
+        "show_depth_limit_summary",
+        lambda actions_executed, commands_succeeded, summary: summaries_shown.append(
+            {"actions": actions_executed, "succeeded": commands_succeeded, "summary": summary}
+        ),
+    )
 
     obj = object.__new__(_cyrax_module.CyraxOrchestrator)
     obj._max_response_depth = 1  # Trigger depth limit after 1 iteration
@@ -257,8 +263,10 @@ def test_depth_limit_warning_is_emitted(monkeypatch):
     obj._stream_response = MagicMock(return_value="follow up with no actions")
     obj._build_system_prompt = MagicMock(return_value="system prompt")
 
+    obj.model = MagicMock()
+    obj.model.generate_stream = MagicMock(return_value=iter([{"done": True}]))
+
     # Make _stream_response keep returning non-empty so the loop hits depth limit
     obj._process_response("initial response with no actions")
 
-    assert warnings_shown, "Expected depth-limit warning to be shown to operator"
-    assert any("depth" in w.lower() or "limit" in w.lower() for w in warnings_shown)
+    assert summaries_shown, "Expected depth-limit summary to be shown to operator"

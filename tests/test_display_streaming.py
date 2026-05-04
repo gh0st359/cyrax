@@ -60,3 +60,25 @@ def test_configure_streaming_disables_chunk_delays(monkeypatch):
 
     assert "one complete chunk" in output.getvalue()
     assert sleeps == []
+
+
+def test_show_depth_limit_summary_renders_panel(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(
+        display,
+        "console",
+        Console(file=output, force_terminal=False, width=100),
+    )
+
+    display.show_depth_limit_summary(
+        actions_executed=12,
+        commands_succeeded=9,
+        summary="Scanned 3 subdomains and tested login forms for XSS.",
+    )
+
+    rendered = output.getvalue()
+    assert "Turn Limit Reached" in rendered
+    assert "12" in rendered
+    assert "9" in rendered
+    assert "Scanned 3 subdomains" in rendered
+    assert "follow-up message" in rendered.lower() or "Send a follow-up" in rendered
