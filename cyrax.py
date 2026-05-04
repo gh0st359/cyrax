@@ -210,6 +210,9 @@ def _default_config() -> dict:
         "display": {
             "show_reasoning": True,
             "theme": "dark",
+            "streaming": True,
+            "stream_delay": 0.012,
+            "stream_chunk_size": 4,
         },
         "safety": {
             "auto_approve": False,
@@ -312,7 +315,7 @@ def _find_unclosed_tags(response: str) -> list[str]:
         if opens > closes:
             unclosed.append(
                 f"{tag_name} (opened {opens}x, closed {closes}x — "
-                f"missing [{'/'+tag_name}] closing tag)"
+                f"missing [/{tag_name}] closing tag)"
             )
     return unclosed
 
@@ -417,7 +420,13 @@ class CyraxOrchestrator:
         self._pending_permission_requests: dict[str, dict] = {}
 
         # Display config
-        self.show_reasoning = config.get("display", {}).get("show_reasoning", True)
+        display_config = config.get("display", {})
+        self.show_reasoning = display_config.get("show_reasoning", True)
+        display.configure_streaming(
+            enabled=display_config.get("streaming", True),
+            delay=display_config.get("stream_delay", 0.012),
+            chunk_size=display_config.get("stream_chunk_size", 4),
+        )
 
         # Iterative action loop limit
         self._max_response_depth = 8
