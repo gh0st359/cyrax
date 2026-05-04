@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyrax"
+version = "1.0.0"
+description = "CYRAX - Autonomous AI Red Team Operator"
+readme = "readme.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "gh0st359", email = "gh0st359@users.noreply.github.com"},
+]
+keywords = [
+    "red-team",
+    "penetration-testing",
+    "security",
+    "ai-agent",
+    "autonomous",
+    "offensive-security",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "openai>=1.12.0",
+    "anthropic>=0.18.0",
+    "rich>=13.7.0",
+    "httpx>=0.27.0",
+    "playwright>=1.40.0",
+    "pyyaml>=6.0.1",
+    "textual>=0.50.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/gh0st359/cyrax-pc"
+"Bug Tracker" = "https://github.com/gh0st359/cyrax-pc/issues"
+"Changelog" = "https://github.com/gh0st359/cyrax-pc/blob/master/CHANGELOG.md"
+
+[project.optional-dependencies]
+google = [
+    "google-generativeai>=0.4.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.2.0",
+    "flake8>=6.0.0",
+]
+
+[project.scripts]
+cyrax = "cyrax:main"
+
+[tool.setuptools]
+py-modules = ["cyrax"]
+packages = ["agents", "models", "tools", "tools.custom_tools", "memory", "config", "utils", "ui"]
+
+
+[tool.setuptools.package-data]
+config = ["prompts/*.txt"]

@@ -1,0 +1,90 @@
+# CYRAX Configuration
+# Copy this file to config.yaml and fill in your settings
+
+model:
+  # Choose ONE provider and configure it
+
+  # Option 1: OpenAI
+  # provider: "openai"
+  # api_key: "sk-xxxxx"
+  # model_name: "gpt-4o"
+
+  # Option 2: Anthropic (default)
+  provider: "anthropic"
+  api_key: "YOUR_API_KEY_HERE"
+  model_name: "claude-sonnet-4-20250514"
+
+  # Option 3: Google Gemini
+  # provider: "google"
+  # api_key: "YOUR_API_KEY_HERE"
+  # model_name: "gemini-1.5-pro"
+
+  # Option 4: xAI Grok
+  # provider: "xai"
+  # api_key: "YOUR_API_KEY_HERE"
+  # model_name: "grok-2"
+
+  # Option 5: Ollama (local)
+  # provider: "ollama"
+  # api_url: "http://localhost:11434"
+  # model_name: "llama3.1:70b"
+
+  # Option 6: LM Studio (local)
+  # provider: "lmstudio"
+  # api_url: "http://localhost:1234/v1"
+  # model_name: "local-model"
+
+  # Option 7: Custom OpenAI-compatible endpoint
+  # provider: "custom"
+  # api_url: "https://your-endpoint.com/v1"
+  # api_key: "YOUR_API_KEY_HERE"
+  # model_name: "your-model"
+
+  # Generation parameters
+  temperature: 0.7
+  max_tokens: 4096
+
+# Tool execution settings
+tools:
+  # Timeout for tool execution in seconds
+  timeout: 300
+  # Allow dangerous commands (rm -rf, etc.)
+  allow_dangerous: false
+  # Working directory for tool execution
+  # Leave empty or omit for auto-detect (uses system temp dir)
+  # Linux/macOS: /tmp/cyrax  |  Windows: C:\Users\<user>\AppData\Local\Temp\cyrax
+  work_dir: ""
+
+# Memory settings
+memory:
+  # Path to persistent storage
+  db_path: "data/cyrax.db"
+  # Maximum conversation history to keep in context
+  max_history: 50
+
+# Logging settings
+logging:
+  # Log directory
+  log_dir: "logs"
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  # Log engagement details for reports
+  engagement_logging: true
+
+# Campaign settings (for --campaign mode)
+campaign:
+  # Default max action-loop depth per turn (overridable with --max-depth)
+  max_depth: 8
+  # Directory for campaign persistent data
+  data_dir: "data/campaigns"
+  # Auto-continue status report interval (every N turns)
+  status_interval: 5
+
+# Display settings
+display:
+  # Show agent reasoning blocks
+  show_reasoning: true
+  # Show raw tool output
+  show_raw_output: false
+  # Color theme: dark, light
+  theme: "dark"
