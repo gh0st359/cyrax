@@ -12,73 +12,47 @@ def reset_streaming_config():
     display.configure_streaming()
 
 
-def test_stream_token_uses_typewriter_chunks_without_delay(monkeypatch):
+def test_stream_token_writes_model_chunks_directly(monkeypatch):
     output = StringIO()
     monkeypatch.setattr(
         display,
         "console",
         Console(file=output, force_terminal=False, width=100),
     )
-    sleeps = []
-    monkeypatch.setattr(display.time, "sleep", lambda delay: sleeps.append(delay))
 
     display.configure_streaming(
         enabled=True,
-        delay=0.01,
-        chunk_size=3,
-        show_cursor=False,
+        delay=999,
+        chunk_size=999,
+        show_cursor=True,
     )
     display.start_streaming("CYRAX")
-    display.stream_token("hello, operator!")
+    display.stream_token("hello")
+    display.stream_token(", operator!")
     display.end_streaming()
 
     rendered = output.getvalue()
     assert "CYRAX responding" in rendered
     assert "│ hello, operator!" in rendered
-    assert sleeps == []
 
 
-def test_configure_streaming_disables_chunk_delays(monkeypatch):
+def test_configure_streaming_can_disable_cursor(monkeypatch):
     output = StringIO()
     monkeypatch.setattr(
         display,
         "console",
         Console(file=output, force_terminal=True, color_system=None, width=100),
     )
-    sleeps = []
-    monkeypatch.setattr(display.time, "sleep", lambda delay: sleeps.append(delay))
 
     display.configure_streaming(
-        enabled=False,
-        delay=0.05,
-        chunk_size=1,
+        enabled=True,
         show_cursor=False,
     )
     display.start_streaming("CYRAX")
     display.stream_token("one complete chunk")
     display.end_streaming()
 
-    assert "one complete chunk" in output.getvalue()
-    assert sleeps == []
-
-
-def test_show_depth_limit_summary_renders_panel(monkeypatch):
-    output = StringIO()
-    monkeypatch.setattr(
-        display,
-        "console",
-        Console(file=output, force_terminal=False, width=100),
-    )
-
-    display.show_depth_limit_summary(
-        actions_executed=12,
-        commands_succeeded=9,
-        summary="Scanned 3 subdomains and tested login forms for XSS.",
-    )
-
     rendered = output.getvalue()
-    assert "Turn Limit Reached" in rendered
-    assert "12" in rendered
-    assert "9" in rendered
-    assert "Scanned 3 subdomains" in rendered
-    assert "follow-up message" in rendered.lower() or "Send a follow-up" in rendered
+    assert "one complete chunk" in rendered
+    assert "▌" not in rendered
+    assert "\x1b[?25l" not in rendered

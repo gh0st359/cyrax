@@ -58,8 +58,8 @@
 - **DEF-M07-2 (P1)** `_failed_pattern_counts` reset each turn — prevents cross-turn
   command blocking when the same command is retried against different targets
 - **DEF-M07-3 (P2)** `_turn_action_counts` capped at 50 entries
-- **DEF-M07-4 (P1)** `display.show_warning()` called when `_max_response_depth` is
-  reached — operator now notified (was silent log-only)
+- **DEF-M07-4 (P1)** action-loop processing now runs until work is complete,
+  paused, interrupted, deduplicated, or stalled — no fixed per-turn depth cutoff
 
 ### M08 — Memory and Evidence Integrity
 - **DEF-M08-1 (P1)** `knowledge_base.store_finding()` normalizes severity to

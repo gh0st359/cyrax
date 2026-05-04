@@ -3,9 +3,7 @@ CYRAX Display Module
 Rich terminal output for the CYRAX red team operator.
 """
 
-import os
 import re
-import time
 from rich import box
 from rich.markup import escape as rich_escape
 from rich.console import Console
@@ -209,26 +207,21 @@ def get_spinner(text: str = "Working...") -> Live:
 _streaming_buffer = []
 _streaming_active = False
 _streaming_enabled = True
-_streaming_delay = 0.012
-_streaming_chunk_size = 4
 _streaming_show_cursor = True
 _streaming_cursor_visible = False
+_streaming_terminal_cursor_hidden = False
 
 
 def configure_streaming(
     enabled: bool = True,
-    delay: float = 0.012,
-    chunk_size: int = 4,
+    delay: float = 0.0,
+    chunk_size: int = 0,
     show_cursor: bool = True,
 ):
     """Configure assistant response streaming behavior."""
     global _streaming_enabled
-    global _streaming_delay
-    global _streaming_chunk_size
     global _streaming_show_cursor
     _streaming_enabled = bool(enabled)
-    _streaming_delay = max(0.0, float(delay))
-    _streaming_chunk_size = max(1, int(chunk_size))
     _streaming_show_cursor = bool(show_cursor)
 
 
@@ -241,31 +234,35 @@ def start_streaming(agent_id: str):
     console.print()
     console.print(f"[bold red]{agent_id}[/bold red] [dim]responding[/dim]")
     console.print("[bold red]│[/bold red] ", end="")
+    _hide_terminal_cursor()
 
 
 def stream_token(token: str):
-    """Display streamed text with typewriter pacing for a livelier CLI."""
+    """Display streamed text as model chunks arrive."""
     if not _streaming_active:
         return
     _streaming_buffer.append(token)
-    for piece in _stream_pieces(token):
-        _erase_stream_cursor()
-        console.file.write(piece)
-        if _streaming_show_cursor and console.is_terminal:
-            console.file.write("\x1b[90m▌\x1b[0m")
-            _set_cursor_visible(True)
-        console.file.flush()
-        if _should_stream_delay(piece):
-            time.sleep(_delay_for_piece(piece))
+    _erase_stream_cursor()
+    console.file.write(token)
+    _draw_stream_cursor()
+    console.file.flush()
 
 
 def end_streaming():
     """End the streaming display."""
     global _streaming_buffer, _streaming_active
     _erase_stream_cursor()
+    _show_terminal_cursor()
     _streaming_active = False
-    console.print()  # Newline after stream ends
+    console.print()
     _streaming_buffer = []
+
+
+def _draw_stream_cursor():
+    if not (_streaming_enabled and _streaming_show_cursor and console.is_terminal):
+        return
+    console.file.write("\x1b[90m▌\x1b[0m")
+    _set_cursor_visible(True)
 
 
 def _set_cursor_visible(visible: bool):
@@ -280,39 +277,20 @@ def _erase_stream_cursor():
     _set_cursor_visible(False)
 
 
-def _stream_pieces(token: str):
-    if not _streaming_enabled:
-        yield token
+def _hide_terminal_cursor():
+    global _streaming_terminal_cursor_hidden
+    if not (_streaming_enabled and _streaming_show_cursor and console.is_terminal):
         return
-
-    piece = ""
-    for char in token:
-        piece += char
-        if len(piece) >= _streaming_chunk_size or char in " \n\t.,;:!?)]}":
-            yield piece
-            piece = ""
-    if piece:
-        yield piece
+    console.file.write("\x1b[?25l")
+    _streaming_terminal_cursor_hidden = True
 
 
-def _should_stream_delay(piece: str) -> bool:
-    if not _streaming_enabled or _streaming_delay <= 0:
-        return False
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
-    if os.environ.get("CYRAX_STREAM_DELAY", "").lower() in {"0", "false", "no", "off"}:
-        return False
-    return bool(piece) and console.is_terminal
-
-
-def _delay_for_piece(piece: str) -> float:
-    if piece.endswith("\n"):
-        return min(_streaming_delay * 3, 0.08)
-    if piece[-1:] in ".!?":
-        return min(_streaming_delay * 6, 0.12)
-    if piece[-1:] in ",;:":
-        return min(_streaming_delay * 3, 0.08)
-    return _streaming_delay
+def _show_terminal_cursor():
+    global _streaming_terminal_cursor_hidden
+    if not _streaming_terminal_cursor_hidden:
+        return
+    console.file.write("\x1b[?25h")
+    _streaming_terminal_cursor_hidden = False
 
 
 class StreamBuffer:
@@ -498,32 +476,3 @@ def prompt_user() -> str:
         return console.input("\n[bold white]> [/bold white]")
     except (EOFError, KeyboardInterrupt):
         return "exit"
-
-
-def show_depth_limit_summary(
-    actions_executed: int,
-    commands_succeeded: int,
-    summary: str,
-):
-    """Display a polished wrap-up panel when the action-loop depth limit is hit."""
-    stats_line = (
-        f"[bold]{actions_executed}[/bold] actions executed, "
-        f"[bold]{commands_succeeded}[/bold] succeeded"
-    )
-    body_parts = [stats_line, ""]
-    if summary:
-        body_parts.append(rich_escape(summary.strip()))
-        body_parts.append("")
-    body_parts.append(
-        "[dim]Send a follow-up message to continue, or type /pause to stop.[/dim]"
-    )
-    console.print()
-    console.print(
-        Panel(
-            "\n".join(body_parts),
-            title="[bold yellow]Turn Limit Reached[/bold yellow]",
-            border_style="yellow",
-            box=box.ROUNDED,
-            padding=(1, 2),
-        )
-    )

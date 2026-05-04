@@ -5,7 +5,7 @@ Tests cover:
 - DEF-M07-1: Unclosed action tags produce [Action Feedback], not silent failure
 - DEF-M07-2: _failed_pattern_counts resets between turns
 - DEF-M07-3: _turn_action_counts is capped at 50 entries
-- DEF-M07-4: Depth-limit warning is shown (not silently logged)
+- DEF-M07-4: Action loop can continue beyond the old fixed depth cutoff
 - _find_all_actions: document-order extraction, multi-action responses
 - _find_unclosed_tags: detects mismatched openers and closers
 """
@@ -211,28 +211,16 @@ def test_turn_action_counts_preserves_recent_values():
     assert counts[-1] == 99
 
 
-# ── DEF-M07-4: depth-limit warning shown ──────────────────────────────────────
+# ── DEF-M07-4: no fixed action-loop depth cutoff ──────────────────────────────
 
 
 @pytest.mark.unit
-def test_depth_limit_warning_is_emitted(monkeypatch):
+def test_process_response_continues_beyond_old_depth_cutoff():
     """
-    DEF-M07-4: When _max_response_depth is reached, display.show_warning()
-    must be called (operator notification — not silent log-only).
+    DEF-M07-4: Long-running turns should continue while actions are producing
+    follow-up work instead of stopping at the old 8-iteration depth cutoff.
     """
-    from utils import display as _display
-
-    summaries_shown = []
-    monkeypatch.setattr(
-        _display,
-        "show_depth_limit_summary",
-        lambda actions_executed, commands_succeeded, summary: summaries_shown.append(
-            {"actions": actions_executed, "succeeded": commands_succeeded, "summary": summary}
-        ),
-    )
-
     obj = object.__new__(_cyrax_module.CyraxOrchestrator)
-    obj._max_response_depth = 1  # Trigger depth limit after 1 iteration
     obj._pause_requested = False
     obj._hard_interrupt_requested = False
     obj._actions_executed_this_turn = 0
@@ -252,21 +240,28 @@ def test_depth_limit_warning_is_emitted(monkeypatch):
     obj.conversation.messages = []
     obj.mission = MagicMock()
     obj.browser = MagicMock()
+    obj.campaign = MagicMock()
+    obj.campaign.target = ""
     obj.agent_pool = MagicMock()
 
     # Patch the methods that _process_response calls
     obj._maybe_regenerate_echo_response = MagicMock(
-        return_value=("no actions here", "no actions here", False)
+        side_effect=lambda response, accumulated, depth, echo_regens: (
+            response,
+            accumulated,
+            False,
+        )
     )
-    obj._execute_actions = MagicMock(return_value=["[Tool Result]\nok"])
+    obj._execute_actions = MagicMock(
+        side_effect=[["[Tool Result]\nok"]] * 12 + [[]]
+    )
     obj._is_planning_without_actions = MagicMock(return_value=False)
-    obj._stream_response = MagicMock(return_value="follow up with no actions")
+    obj._stream_response = MagicMock(
+        side_effect=[f"follow up {i}" for i in range(12)]
+    )
     obj._build_system_prompt = MagicMock(return_value="system prompt")
 
-    obj.model = MagicMock()
-    obj.model.generate_stream = MagicMock(return_value=iter([{"done": True}]))
-
-    # Make _stream_response keep returning non-empty so the loop hits depth limit
     obj._process_response("initial response with no actions")
 
-    assert summaries_shown, "Expected depth-limit summary to be shown to operator"
+    assert obj._stream_response.call_count == 12
+    assert obj._execute_actions.call_count == 13
