@@ -66,6 +66,7 @@ class ModelManager:
             return XAIClient(
                 api_key=self.api_key,
                 model=self.model_name,
+                api_url=self.api_url or None,
             )
 
         elif self.provider == "ollama":

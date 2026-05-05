@@ -19,6 +19,7 @@ import pytest
 import cyrax as _cyrax_module
 
 _find_all_actions = _cyrax_module._find_all_actions
+_find_tool_intent_actions = _cyrax_module._find_tool_intent_actions
 _find_unclosed_tags = _cyrax_module._find_unclosed_tags
 
 
@@ -62,6 +63,32 @@ def test_find_all_actions_no_match_for_unclosed_execute():
     actions = _find_all_actions(response)
     # regex requires both open and close — unclosed yields nothing
     assert not any(kind == "execute" for _, kind, _ in actions)
+
+
+@pytest.mark.unit
+def test_find_tool_intent_actions_recovers_bash_command():
+    response = "invoke tool bash with command is ls -la /Users/henry/Downloads/cyrax"
+    actions = _find_tool_intent_actions(response)
+    assert len(actions) == 1
+    assert actions[0][1] == "execute_text"
+    assert actions[0][2] == "ls -la /Users/henry/Downloads/cyrax"
+
+
+@pytest.mark.unit
+def test_try_extract_target_accepts_local_paths():
+    obj = object.__new__(_cyrax_module.CyraxOrchestrator)
+    obj.scope = type("Scope", (), {"enabled": False})()
+    obj.campaign = type("Campaign", (), {})()
+    configured = []
+    obj._configure_scope = configured.append
+
+    _cyrax_module.CyraxOrchestrator._try_extract_target(
+        obj,
+        "Look at /Users/henry/Downloads/cyrax for vulnerabilities",
+    )
+
+    assert obj.campaign.target == "/Users/henry/Downloads/cyrax"
+    assert configured == ["/Users/henry/Downloads/cyrax"]
 
 
 @pytest.mark.unit

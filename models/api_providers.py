@@ -325,61 +325,12 @@ class GoogleClient(BaseModelClient):
             raise
 
 
-class XAIClient(BaseModelClient):
+class XAIClient(OpenAIClient):
     """Client for xAI Grok API (OpenAI-compatible)."""
 
-    def __init__(self, api_key: str, model: str):
-        import openai
-
-        self.client = openai.OpenAI(
-            api_key=api_key,
-            base_url="https://api.x.ai/v1",
-        )
-        self.model = model
+    def __init__(self, api_key: str, model: str, api_url: Optional[str] = None):
+        super().__init__(api_key=api_key, model=model, api_url=api_url or "https://api.x.ai/v1")
         self.provider_name = "xai"
-
-    def generate(
-        self,
-        system: str,
-        messages: list[dict],
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-    ) -> dict:
-        logger = get_logger()
-
-        api_messages = [{"role": "system", "content": system}]
-        for msg in messages:
-            api_messages.append({"role": msg["role"], "content": msg["content"]})
-
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=api_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-
-            content = response.choices[0].message.content or ""
-            tokens_in = response.usage.prompt_tokens if response.usage else 0
-            tokens_out = response.usage.completion_tokens if response.usage else 0
-
-            logger.log_model_call(
-                agent_id="model",
-                provider=self.provider_name,
-                model=self.model,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-            )
-
-            return {
-                "content": content,
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-            }
-
-        except Exception as e:
-            logger.log_error("model", f"xAI API error: {e}")
-            raise
 
 
 class CustomAPIClient(BaseModelClient):
@@ -437,3 +388,5 @@ class CustomAPIClient(BaseModelClient):
         except Exception as e:
             logger.log_error("model", f"Custom API error: {e}")
             raise
+
+    generate_stream = OpenAIClient.generate_stream

@@ -207,6 +207,26 @@ def test_cli_parser_exposes_subcommands():
     assert args.provider == "ollama"
     assert args.model == "llama3.1"
 
+    bare = parser.parse_args([])
+    assert bare.command is None
+    assert callable(bare.handler)
+
+
+@pytest.mark.unit
+def test_grok_environment_selects_xai_provider(monkeypatch):
+    """Bare `cyrax` should work with the user's GROK_* environment variables."""
+    import cyrax
+
+    monkeypatch.setenv("GROK_API_KEY", "xai-test")
+    monkeypatch.setenv("GROK_BASE_URL", "https://api.x.ai/v1")
+    monkeypatch.setenv("GROK_PRIMARY_MODEL", "grok-4.3")
+
+    config = cyrax.load_config("/tmp/definitely-missing-cyrax-config.yaml")
+    assert config["model"]["provider"] == "xai"
+    assert config["model"]["api_key"] == "xai-test"
+    assert config["model"]["api_url"] == "https://api.x.ai/v1"
+    assert config["model"]["model_name"] == "grok-4.3"
+
 
 @pytest.mark.unit
 def test_load_config_merges_defaults_and_redacts_keys(tmp_path):
