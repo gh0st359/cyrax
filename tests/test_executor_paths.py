@@ -1,6 +1,7 @@
 import pytest
 
 from tools.executor import ToolExecutor
+from utils.safety import ScopeEnforcer
 
 
 @pytest.mark.unit
@@ -39,3 +40,21 @@ def test_rejects_absolute_path(tmp_path):
     read_result = executor.read_file("/etc/passwd")
     assert not read_result.success
     assert "Rejected path outside work directory" in read_result.stderr
+
+
+@pytest.mark.unit
+def test_allows_absolute_path_with_scope(tmp_path):
+    scoped_dir = tmp_path / "scoped"
+    scoped_dir.mkdir()
+    target_file = scoped_dir / "notes.txt"
+    target_file.write_text("hello")
+
+    executor = ToolExecutor(
+        work_dir=str(tmp_path / "work"),
+        scope_enforcer=ScopeEnforcer([str(scoped_dir)]),
+    )
+
+    read_result = executor.read_file(str(target_file))
+
+    assert read_result.success
+    assert read_result.stdout == "hello"

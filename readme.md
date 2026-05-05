@@ -48,11 +48,14 @@ cyrax
 CYRAX starts like Claude Code: type `cyrax`. That opens the premium interactive operator by default. Subcommands exist only as secondary utilities.
 
 ```bash
-cyrax
-cyrax "look at /path/to/authorized/repo for vulnerabilities" --auto
-cyrax status --show-config
-cyrax tools --available
-cyrax preflight
+cyrax                                           # Start interactive operator
+cyrax "scan example.com" --auto                 # One-shot with auto permissions
+cyrax --scope 10.0.0.0/24                       # Pre-set target scope
+cyrax --add-dir /path/to/local/project          # Add local directory to workspace
+cyrax --permission-mode plan                    # Start in plan mode
+cyrax status --show-config                      # Show resolved config
+cyrax tools --available                         # List installed tools
+cyrax preflight                                 # Check environment readiness
 ```
 
 Top-level flags such as `--setup`, `--campaign`, `--scope`, `--auto`, and one-shot prompt execution continue to work for backwards compatibility. The old Textual TUI is optional; the default `cyrax` experience is the maintained premium terminal operator.
@@ -110,23 +113,27 @@ src/                        # TypeScript backend work-in-progress
 
 ## Interactive Commands
 
-| Command      | Description                    |
-|-------------|--------------------------------|
-| `/status`   | Show campaign status           |
-| `/config`   | Show runtime config (redacted) |
-| `/model`    | Show or switch model name      |
-| `/mode`     | Show or switch permission mode |
-| `/scope`    | Show or update target scope    |
-| `/auto`     | Enable autonomous permissions  |
-| `/compact`  | Summarize older context        |
-| `/clear`    | Clear conversation context     |
-| `/agents`   | List active agents             |
-| `/findings` | Show all security findings     |
-| `/creds`    | Show discovered credentials    |
-| `/hosts`    | Show discovered hosts          |
-| `/usage`    | Show model token usage         |
-| `/help`     | Show available commands        |
-| `/exit`     | Exit CYRAX                     |
+| Command          | Description                                    |
+|-----------------|------------------------------------------------|
+| `/status`       | Show campaign status                           |
+| `/config`       | Show runtime config (redacted)                 |
+| `/model [name]` | Show or switch model name                      |
+| `/mode [mode]`  | Show or switch permission mode (auto/interactive/plan) |
+| `/scope [target]`| Switch target scope (resets previous)          |
+| `/add-dir <path>`| Add a directory to workspace scope             |
+| `/plan`         | Enter plan mode — analyze before executing     |
+| `/auto`         | Enable fully autonomous permissions            |
+| `/approve <cat>`| Pre-approve an action category                 |
+| `/compact [n]`  | Summarize older context (keep last n messages) |
+| `/clear`        | Clear conversation context                     |
+| `/agents`       | List active agents                             |
+| `/findings`     | Show all security findings                     |
+| `/creds`        | Show discovered credentials                    |
+| `/hosts`        | Show discovered hosts                          |
+| `/usage`        | Show model token usage                         |
+| `/export`       | Export findings report                         |
+| `/help`         | Show available commands                        |
+| `/exit`         | Exit CYRAX                                     |
 
 ## Configuration
 

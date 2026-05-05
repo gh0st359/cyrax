@@ -595,11 +595,17 @@ class ToolExecutor:
         return any(dangerous in cmd_lower for dangerous in DANGEROUS_COMMANDS)
 
     def _resolve_user_path(self, user_path: str) -> Path:
-        """Resolve a user-supplied path against the executor working directory."""
+        """Resolve a user-supplied path against the executor working directory.
+
+        Absolute paths are resolved directly; relative paths are joined to work_dir.
+        """
+        p = Path(user_path).expanduser()
+        if p.is_absolute():
+            return p.resolve()
         return (self.work_dir / user_path).resolve()
 
     def _validate_user_path(self, action: str, user_path: str) -> tuple[Optional[Path], Optional[CommandResult]]:
-        """Ensure resolved paths stay within the configured work directory.
+        """Ensure resolved paths stay within the work directory or scope-allowed paths.
 
         Additional defences:
         - Null bytes in path strings (classic C-library bypass).
@@ -623,15 +629,20 @@ class ToolExecutor:
         work_dir_resolved = self.work_dir.resolve()
         resolved_path = self._resolve_user_path(user_path)
 
-        if resolved_path != work_dir_resolved and work_dir_resolved not in resolved_path.parents:
-            msg = (
-                f"Rejected path outside work directory: requested='{user_path}', "
-                f"resolved='{resolved_path}', work_dir='{work_dir_resolved}'"
-            )
-            logger.log_error("executor", msg)
-            return None, CommandResult(f"{action}({user_path})", "", msg, 1)
+        # Allow if within work directory
+        if resolved_path == work_dir_resolved or work_dir_resolved in resolved_path.parents:
+            return resolved_path, None
 
-        return resolved_path, None
+        # Allow if within scope-allowed paths (local workspace targets)
+        if self.scope_enforcer and self.scope_enforcer.is_path_in_scope(str(resolved_path)):
+            return resolved_path, None
+
+        msg = (
+            f"Rejected path outside work directory: requested='{user_path}', "
+            f"resolved='{resolved_path}', work_dir='{work_dir_resolved}'"
+        )
+        logger.log_error("executor", msg)
+        return None, CommandResult(f"{action}({user_path})", "", msg, 1)
 
     def execute(
         self,

@@ -293,6 +293,8 @@ def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
         actions.append((m.start(), 'spawn', m))
     for m in re.finditer(r'\[STORE\s+category="(\w+)"\s+key="([^"]+)"\](.*?)\[/STORE\]', response, re.DOTALL):
         actions.append((m.start(), 'store', m))
+    for m in re.finditer(r'\[READ_FILE\s+path="([^"]+)"\s*\]', response):
+        actions.append((m.start(), 'read_file', m))
     for m in re.finditer(r'\[KILL\s+agent="([^"]+)"(?:\s+reason="([^"]*)")?\]', response):
         actions.append((m.start(), 'kill', m))
     for m in re.finditer(r'\[FINDING\s+severity="(\w+)"\s+title="([^"]+)"\](.*?)\[/FINDING\]', response, re.DOTALL):
@@ -472,6 +474,7 @@ class CyraxOrchestrator:
 
         # Dedup: temperature escalation on repeated responses
         self._dedup_temp_boost: float = 0.0
+        self._last_response_was_refusal: bool = False
 
         # Campaign mode
         self._campaign_mode = False
@@ -484,6 +487,9 @@ class CyraxOrchestrator:
         # Pause flag
         self._pause_requested = False
         self._hard_interrupt_requested = False
+
+        # Plan mode (Claude Code-style: think before acting)
+        self._plan_mode = False
 
         # Load and validate prompt templates at startup
         self._orchestrator_prompt_template = self._load_orchestrator_prompt_template()
@@ -574,7 +580,7 @@ class CyraxOrchestrator:
         targets = re.split(r'[,;\s]+', target_str)
         targets = [t.strip() for t in targets if t.strip()]
         if targets:
-            self.scope = ScopeEnforcer(targets)
+            self.scope.reset(targets)
             self.tools.executor.scope_enforcer = self.scope
             self.logger.info(f"Scope configured: {targets}")
 
@@ -678,6 +684,8 @@ class CyraxOrchestrator:
 
     def _current_mode_label(self) -> str:
         """Return the current operator permission mode label."""
+        if self._plan_mode:
+            return "plan"
         if self.permission_gate.auto_approve:
             return "auto"
         return self.permission_gate.policy_mode
@@ -688,8 +696,10 @@ class CyraxOrchestrator:
             ("/status", "", "Show campaign, model, permissions, and scope"),
             ("/config", "", "Show active provider/model/workdir without secrets"),
             ("/model", "[name]", "Show or switch the current model name"),
-            ("/scope", "[target]", "Show or update authorized target scope"),
-            ("/mode", "[auto|interactive|ci]", "Show or switch permission mode"),
+            ("/scope", "[target]", "Switch target scope (resets previous scope)"),
+            ("/add-dir", "<path>", "Add a directory to the workspace scope"),
+            ("/mode", "[auto|interactive|plan]", "Show or switch permission mode"),
+            ("/plan", "", "Enter plan mode — think before acting"),
             ("/approve", "<category>", "Pre-approve an action category"),
             ("/auto", "", "Enable fully autonomous mode"),
             ("/compact", "[keep]", "Summarize older conversation context"),
@@ -726,22 +736,49 @@ class CyraxOrchestrator:
         # Build persistent mission memory block
         mission_context = self.mission.build_context_block()
 
-        # === STANDBY MODE: no target yet — conversational ===
+        if self._plan_mode:
+            return f"""You are CYRAX in plan mode.
+
+Create a concise execution plan for the user's request. Do NOT execute commands or emit action blocks.
+
+Your plan should be specific, operational, and ready to execute once the user switches mode with /mode auto or /mode interactive.
+
+TARGET: {target or "not set"}
+SCOPE: {scope_desc}
+WORKSPACE: {workspace_context}
+ENGAGEMENT STATE: {campaign_summary}
+
+{platform_context}
+
+{mission_context}
+"""
+
+        # === STANDBY MODE: no target yet — conversational but capable ===
         if not target:
-            return f"""You are CYRAX, an autonomous AI red team operator for authorized penetration testing.
+            return f"""You are CYRAX, an autonomous AI operator with full shell access and broad capabilities.
 
-No target has been set yet. Respond conversationally. Do NOT execute any commands or action blocks.
+No target has been set yet, but you can still execute commands, read/write files, and help with any task.
 
-When the user provides a target (URL, IP, domain, or file path), you will begin operations. Until then, answer questions naturally.
+When the user provides a target (URL, IP, domain, or local file path), you will begin focused operations. Meanwhile, answer questions and execute commands as needed.
 
-Your capabilities: reconnaissance, vulnerability scanning, exploitation (SQLi, XSS, CSRF, auth bypass, command injection), brute-forcing, post-exploitation, data extraction, browser automation, custom script writing, and sub-agent coordination for parallel operations.
+CAPABILITIES:
+- Shell commands, scripts, programming in any language
+- File reading, writing, editing, code analysis
+- Security scanning, penetration testing, vulnerability research
+- Browser automation and web interaction
+- Package installation, environment setup, builds
 
-RESPONSE STYLE:
-- Talk like a skilled human operator, not a chatbot. Short, direct, no filler.
-- NEVER use markdown headers (###), bold (**text**), bullet points, or numbered lists.
-- NEVER end with "Let me know", "Please let me know", or similar filler.
-- NEVER ask the user to respond "yes" or "no". NEVER ask the user to do anything manually.
-- Keep responses concise — a few sentences at most.
+ACTION FORMAT:
+[EXECUTE] <shell_command> [/EXECUTE]
+[WRITE_FILE path="script.py"] <code> [/WRITE_FILE]
+[READ_FILE path="filepath"] [/READ_FILE]
+
+RULES:
+- When the user asks you to do something, do it. Output action blocks.
+- Talk like a skilled engineer, not a chatbot. Short, direct, no filler.
+- NEVER use markdown headers, bold, bullets, or numbered lists.
+- NEVER end with "Let me know" or filler. NEVER ask the user to do things manually.
+- You are autonomous. Make decisions and act.
 
 {platform_context}
 
@@ -798,9 +835,11 @@ RESPONSE STYLE:
         # failed against target A isn't blocked when retried against target B.
         self._failed_pattern_counts = {}
 
-        # Extract target from first user message if scope not yet configured
-        if not self.scope.enabled:
-            self._try_extract_target(user_message)
+        # Extract or update target whenever the user names a URL, IP, domain, or
+        # local path. This mirrors Claude Code's workspace model: explicit user
+        # direction can switch focus mid-session instead of trapping CYRAX in
+        # stale scope.
+        self._try_extract_target(user_message)
 
         system_prompt = self._build_system_prompt()
 
@@ -821,42 +860,70 @@ RESPONSE STYLE:
         return response
 
     def _try_extract_target(self, message: str):
-        """Try to extract target IP/domain from the user's first message and configure scope."""
-        # Look for full URLs first (most specific)
+        """Extract target from user message and update scope dynamically.
+
+        Unlike the original implementation, this always runs -- even when scope
+        is already enabled -- so the user can switch targets mid-session by
+        mentioning a new URL, path, IP, or domain.  Explicit switch verbs
+        ('switch to', 'look at', 'scan', 'focus on', 'target', 'check')
+        trigger a full scope reset; otherwise new targets are additive.
+        """
+        _SWITCH_VERBS = re.compile(
+            r'\b(?:switch\s+to|look\s+at|scan|focus\s+on|target|check|analyze|audit|examine|inspect)\b',
+            re.IGNORECASE,
+        )
+        is_explicit_switch = bool(_SWITCH_VERBS.search(message))
+
+        new_target = None
+
+        # Full URLs first (most specific)
         url_match = re.search(r'(https?://[^\s,]+)', message)
         if url_match:
-            full_url = url_match.group(1).rstrip(".,;")
             from urllib.parse import urlparse
+            full_url = url_match.group(1).rstrip(".,;")
             parsed = urlparse(full_url)
             if parsed.hostname:
-                self._configure_scope(parsed.hostname)
-                # Store the full URL as target for better context
-                self.campaign.target = full_url
-                return
+                new_target = full_url
 
-        # Look for local paths before domains so /Users/name/repo is treated as a target.
-        local_path_match = re.search(r'(?<!\S)((?:~|/|[A-Za-z]:\\)[^\s,;\'"`<>]+)', message)
-        if local_path_match:
-            target = local_path_match.group(1).rstrip(".,;")
-            self._configure_scope(target)
-            self.campaign.target = target
+        # Local paths (before domains so /Users/name/repo beats a domain in the same msg)
+        if not new_target:
+            local_path_match = re.search(r'(?<!\S)((?:~|/|[A-Za-z]:[\\/])[^\s,;\'\"`<>]+)', message)
+            if local_path_match:
+                new_target = local_path_match.group(1).rstrip(".,;")
+
+        # IPs
+        if not new_target:
+            ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', message)
+            if ip_match:
+                new_target = ip_match.group(1)
+
+        # Domain-like strings
+        if not new_target:
+            domain_match = re.search(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})\b', message)
+            if domain_match:
+                domain = domain_match.group(1).lower()
+                _FALSE_POSITIVES = {'example.com', 'target.com', 'google.com', 'github.com'}
+                if domain not in _FALSE_POSITIVES:
+                    new_target = domain
+
+        if not new_target:
             return
 
-        # Look for IPs
-        ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', message)
-        if ip_match:
-            self._configure_scope(ip_match.group(1))
-            self.campaign.target = ip_match.group(1)
+        # If target is the same as current, no change needed
+        if new_target == getattr(self.campaign, "target", None):
             return
 
-        # Look for domain-like strings
-        domain_match = re.search(r'\b([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,})\b', message)
-        if domain_match:
-            domain = domain_match.group(1).lower()
-            # Skip common false positives
-            if domain not in ('example.com', 'target.com', 'google.com', 'github.com'):
-                self._configure_scope(domain)
-                self.campaign.target = domain
+        # Determine scope update strategy
+        if is_explicit_switch or not self.scope.enabled:
+            self._configure_scope(new_target)
+            self.campaign.target = new_target
+            display.show_info(f"Target updated: {new_target}")
+        else:
+            # Additive: extend scope to include new target
+            self.scope.add_targets([new_target])
+            self.tools.executor.scope_enforcer = self.scope
+            if not self.campaign.target:
+                self.campaign.target = new_target
 
     def _stream_response(self, system_prompt: str) -> str:
         """Stream a model response with real-time display."""
@@ -913,6 +980,10 @@ RESPONSE STYLE:
         Process CYRAX's response for embedded actions iteratively.
         Each loop: extract actions, execute, get follow-up, repeat.
         """
+        # In plan mode, skip action extraction and execution entirely
+        if getattr(self, "_plan_mode", False):
+            return response
+
         accumulated = response
         current_response = response
         seen_hashes_this_turn: set[str] = set()
@@ -1026,10 +1097,19 @@ RESPONSE STYLE:
                 # execute any commands", so injecting [Action Feedback] would
                 # override that and cause the LLM to run unsolicited commands.
                 in_operational_mode = bool(self.campaign.target)
+                is_refusal = self._is_refusal_response(current_response)
                 should_force_action = in_operational_mode and (
                     (depth == 0 and self._actions_executed_this_turn == 0)
                     or self._is_planning_without_actions(current_response)
-                )
+                ) and not is_refusal
+                if is_refusal:
+                    if self._last_response_was_refusal:
+                        display.show_info(
+                            "Refusal loop suppressed. Switch scope with /scope <target>, "
+                            "add local paths with /add-dir <path>, or ask for a safe test plan."
+                        )
+                    self._last_response_was_refusal = True
+                    break
                 if should_force_action:
                     self.logger.info("No actions in response (reasoning/planning-only turn)")
                     self.conversation.add_message(
@@ -1051,6 +1131,7 @@ RESPONSE STYLE:
                 break
 
             # Feed results back to get follow-up
+            self._last_response_was_refusal = False
             combined = "\n\n".join(action_results)
             self.conversation.add_message("user", f"[Action Results]\n{combined}")
 
@@ -1272,6 +1353,21 @@ RESPONSE STYLE:
         lowered = text.lower()
         return any(re.search(pattern, lowered) for pattern in plan_patterns)
 
+    def _is_refusal_response(self, text: str) -> bool:
+        """Detect model refusal outputs so the loop does not amplify them."""
+        lowered = text.strip().lower()
+        refusal_markers = (
+            "refused",
+            "i will not",
+            "i won't",
+            "i cannot",
+            "i can't",
+            "refusal stands",
+            "no action blocks will be executed",
+            "no actions executed",
+        )
+        return any(marker in lowered[:600] for marker in refusal_markers)
+
     def _available_tool_names(self) -> str:
         """Return a compact, prompt-safe list of currently available tool names."""
         available = [name for name, tool in sorted(self.tools.tools.items()) if tool.available]
@@ -1323,6 +1419,20 @@ RESPONSE STYLE:
                 )
                 if result.success:
                     self.mission.add_file(file_path)
+                    self._cmds_succeeded_this_turn += 1
+
+            elif action_type == "read_file":
+                file_path = match.group(1).strip()
+                self._actions_executed_this_turn += 1
+                result = self.tools.executor.read_file(file_path)
+                style = "green" if result.success else "red"
+                display.show_tool_event("read", file_path, result.output[:160], style=style)
+                action_results.append(
+                    f"[File Read Result for: {file_path}]\n"
+                    f"Success: {result.success}\n"
+                    f"Output:\n{result.output}"
+                )
+                if result.success:
                     self._cmds_succeeded_this_turn += 1
 
             elif action_type in ("execute", "execute_text"):
@@ -2033,15 +2143,20 @@ RESPONSE STYLE:
                 display.show_info(f"Current permission mode: {self._current_mode_label()}")
             elif mode == "auto":
                 self.permission_gate.auto_approve_all()
+                self._plan_mode = False
                 display.show_success("Permission mode set to auto.")
             elif mode in ("interactive", "default", "ask"):
                 self.permission_gate.auto_approve = False
+                self._plan_mode = False
                 display.show_success("Permission mode set to interactive.")
+            elif mode == "plan":
+                self._plan_mode = True
+                display.show_success("Permission mode set to plan. CYRAX will present plans before acting.")
             elif mode == "ci":
                 self.permission_gate.auto_approve = False
                 display.show_info("CI mode is selected automatically when stdin is non-interactive.")
             else:
-                display.show_info("Usage: /mode [auto|interactive|ci]")
+                display.show_info("Usage: /mode [auto|interactive|plan|ci]")
             return ""
 
         if cmd == "/agents":
@@ -2142,8 +2257,11 @@ RESPONSE STYLE:
 
         if cmd_name == "/scope":
             if cmd_args:
-                self._configure_scope(cmd_args)
-                display.show_success(f"Scope updated: {self.scope.get_scope_description()}")
+                new_target = cmd_args.strip()
+                self.scope.reset()
+                self._configure_scope(new_target)
+                self.campaign.target = new_target
+                display.show_success(f"Scope switched to: {self.scope.get_scope_description()}")
             else:
                 display.show_info(f"Current scope: {self.scope.get_scope_description()}")
             return ""
@@ -2160,6 +2278,25 @@ RESPONSE STYLE:
         if cmd == "/auto":
             self.permission_gate.auto_approve_all()
             display.show_success("Permission mode set to auto. CYRAX will not prompt for actions.")
+            return ""
+
+        if cmd_name == "/add-dir":
+            if cmd_args:
+                new_path = cmd_args.strip()
+                self.scope.add_targets([new_path])
+                self.tools.executor.scope_enforcer = self.scope
+                display.show_success(f"Added to workspace: {new_path}")
+                display.show_info(f"Scope: {self.scope.get_scope_description()}")
+            else:
+                display.show_info("Usage: /add-dir <path>")
+            return ""
+
+        if cmd == "/plan":
+            display.show_info(
+                "Plan mode enabled. CYRAX will analyze and present a plan before "
+                "executing any actions. Send your request now."
+            )
+            self._plan_mode = True
             return ""
 
         if cmd_name == "/compact":
@@ -2749,8 +2886,19 @@ def chat_cli(args: argparse.Namespace) -> int:
 
     cyrax = CyraxOrchestrator(config)
 
+    permission_mode = getattr(args, "permission_mode", "") or ""
+    if permission_mode == "auto":
+        cyrax.permission_gate.auto_approve_all()
+    elif permission_mode == "plan":
+        cyrax._plan_mode = True
+
     if args.scope:
         cyrax._configure_scope(args.scope)
+        cyrax.campaign.target = args.scope
+
+    for add_dir in getattr(args, "add_dir", []) or []:
+        cyrax.scope.add_targets([add_dir])
+        cyrax.tools.executor.scope_enforcer = cyrax.scope
 
     if args.campaign:
         cyrax.start_campaign(args.campaign, objective=args.objective)
@@ -2914,6 +3062,18 @@ def _add_chat_arguments(parser: argparse.ArgumentParser, prompt_dest: str = "pro
         type=str,
         default="",
         help="Comma-separated list of in-scope targets (IPs, domains, CIDRs)",
+    )
+    parser.add_argument(
+        "--add-dir",
+        action="append",
+        default=[],
+        help="Add a local directory to the active workspace scope",
+    )
+    parser.add_argument(
+        "--permission-mode",
+        choices=("interactive", "auto", "plan"),
+        default="",
+        help="Start in a Claude Code-style permission mode",
     )
     parser.add_argument(
         "--tui",
