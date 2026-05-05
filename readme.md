@@ -159,20 +159,9 @@ All agents are powered by the same model with role-specific prompts. The framewo
 ## Legal Notice
 
 This tool is intended for authorized security testing only. Always obtain proper written authorization before testing any system. Unauthorized access to computer systems is illegal.
-
-## Pre-Release Checklist
-
-Before cutting a release, run this checklist:
-
-- [ ] Run full test suite: `pytest`
-- [ ] Run lint checks (project-standard linter/formatters)
-- [ ] Execute a smoke campaign against an authorized test target
-- [ ] Export and archive the campaign report/artifacts for review
-
-
 ## TypeScript Backend
 
-The `upgrade` branch migrates the backend runtime to TypeScript. The Python implementation remains in-tree during the transition for compatibility and regression reference, while CI now validates both the existing Python tests and the new Vitest/TypeScript suite.
+The `upgrade` branch migrates the backend runtime to TypeScript. The Python implementation remains in-tree during the transition for compatibility and regression reference, while local validation covers both the existing Python tests and the new Vitest/TypeScript suite.
 
 Useful developer commands:
 
