@@ -9,32 +9,24 @@ An AI-powered autonomous red team operator that thinks, reasons, and operates li
 git clone https://github.com/gh0st359/cyrax-private.git
 cd cyrax-private
 
-# Install the TypeScript backend dependencies
-npm install
+# Install locally
+pip3 install -e .
 
-# Build the CLI
-npm run build
-
-# Optional browser automation support
-npx playwright install chromium
-
-# First time? Run setup to configure your model provider
-npm run dev -- init
-
-# After that, start CYRAX
-npm run dev -- chat
+# Start CYRAX
+cyrax
 ```
 
 ### Installable Package (Optional)
 
-If you prefer a local `cyrax` command while developing:
+If you prefer the TypeScript backend while developing:
 
 ```bash
+npm install
+npm run build
 npm link
 
-# Then just run:
-cyrax init      # first time
-cyrax chat      # after that
+# Then run the same single command:
+cyrax
 ```
 
 ### Environment Variable Shortcut
@@ -42,41 +34,46 @@ cyrax chat      # after that
 ```bash
 # Set your API key and skip setup entirely
 export ANTHROPIC_API_KEY="your-key-here"
-npm run dev -- chat
+cyrax
+
+# xAI/Grok also works out of the box:
+export GROK_API_KEY="your-key-here"
+export GROK_BASE_URL="https://api.x.ai/v1"
+export GROK_PRIMARY_MODEL="grok-4.3"
+cyrax
 ```
 
 ## CLI
 
-CYRAX now runs on a TypeScript/Node backend with an assistant-ui-inspired command layout for setup, discovery, and responsive Claude/Codex-style chat while preserving the original `cyrax` operator entry point.
+CYRAX starts like Claude Code: type `cyrax`. That opens the premium interactive operator by default. Subcommands exist only as secondary utilities.
 
 ```bash
-cyrax init
-cyrax configure --provider anthropic --api-key-env ANTHROPIC_API_KEY
+cyrax
+cyrax "look at /path/to/authorized/repo for vulnerabilities" --auto
 cyrax status --show-config
 cyrax tools --available
 cyrax preflight
-cyrax chat --scope example-company.com --campaign example
-cyrax chat "recon example-company.com" --print --auto
 ```
 
-Top-level chat flags such as `--setup`, `--campaign`, `--scope`, `--auto`,
-`--tui`, `--simple`, and one-shot prompt execution continue to work for
-backwards compatibility.
+Top-level flags such as `--setup`, `--campaign`, `--scope`, `--auto`, and one-shot prompt execution continue to work for backwards compatibility. The old Textual TUI is optional; the default `cyrax` experience is the maintained premium terminal operator.
 
 ## How It Works
 
 Talk to CYRAX like you're talking to a senior pentester:
 
 ```
-CYRAX: Ready. What's the target?
+cyrax › Ready.
 
-cyrax › I need you to test example-company.com
+╭─ user
+╰─ I need you to test example-company.com
 
-CYRAX: Let me start by mapping their attack surface...
-● RUN nmap -sV example-company.com
-● SHELL nmap -sV example-company.com 22/tcp open ssh
+╭─ cyrax thinking
+│ Let me start by mapping their attack surface...
+╰─
+● run nmap -sV example-company.com
+  ⎿ 22/tcp open ssh
 
-CYRAX: Found 127 subdomains, 3 interesting targets:
+cyrax › Found 127 subdomains, 3 interesting targets:
 - jenkins.example-company.com (potentially unauthenticated)
 - dev-api.example-company.com (Swagger UI exposed)
 - vpn.example-company.com (outdated firmware)
@@ -101,15 +98,14 @@ Which should I pursue first?
 ## Architecture
 
 ```
-src/cli.ts                  # Commander-based CLI entry point
-src/orchestrator.ts         # Main operator loop and action execution
-src/agents/                 # Recon, exploit, post, AD, web, cloud, OSINT agents
-src/models/                 # Anthropic, OpenAI/xAI/custom, Google, Ollama clients
-src/tools/                  # Shell executor, tool registry, Playwright browser automation
-src/memory/                 # Conversation, campaign, mission, knowledge stores
-src/utils/                  # Safety/scope, action parsing, display, logging
-src/config/                 # Typed config defaults and YAML loader
-tests/ts/                   # Vitest coverage for the TypeScript backend
+cyrax.py                    # installable `cyrax` entry point and operator loop
+agents/                     # Recon, exploit, post, AD, web, cloud, OSINT agents
+models/                     # Anthropic, OpenAI/xAI/custom, Google, Ollama clients
+tools/                      # Shell executor, tool registry, browser automation
+memory/                     # Conversation, campaign, mission, knowledge stores
+utils/                      # Safety/scope, action parsing, display, logging
+config/                     # YAML config and orchestrator prompt
+src/                        # TypeScript backend work-in-progress
 ```
 
 ## Interactive Commands

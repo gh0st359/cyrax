@@ -3,13 +3,15 @@ CYRAX Display Module
 Rich terminal output for the CYRAX red team operator.
 """
 
+import queue
 import re
+import threading
+import time
 from rich import box
 from rich.markup import escape as rich_escape
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.live import Live
@@ -31,15 +33,18 @@ BANNER = r"""
 
 def show_banner():
     """Display the CYRAX startup banner."""
+    title = Text()
+    title.append("CYRAX", style="bold red")
+    title.append("  mythos preview", style="dim")
+
+    body = Text()
+    body.append("autonomous red-team operator\n", style="bold")
+    body.append("one command: ", style="dim")
+    body.append("cyrax", style="bold white")
+    body.append("  ·  natural language in, scoped action out", style="dim")
+
     console.print(
-        Panel(
-            Text(BANNER, style="bold red", justify="center"),
-            title="[bold white]CYRAX[/bold white] [dim]autonomous red-team operator[/dim]",
-            subtitle="[dim]natural language in, scoped operations out[/dim]",
-            border_style="red",
-            box=box.ROUNDED,
-            padding=(0, 2),
-        )
+        Panel(body, title=title, border_style="red", box=box.ROUNDED, padding=(0, 2))
     )
     console.print()
 
@@ -101,30 +106,15 @@ def show_reasoning(agent_id: str, text: str):
 
 def show_execution(agent_id: str, command: str):
     """Display a command being executed."""
-    console.print(
-        Panel(
-            Syntax(command, "bash", theme="monokai", line_numbers=False),
-            title=f"[bold cyan]{agent_id} Executing[/bold cyan]",
-            border_style="cyan",
-            box=box.SIMPLE,
-            padding=(0, 1),
-        )
-    )
+    show_tool_event("run", command, style="cyan")
 
 
 def show_tool_output(agent_id: str, output: str, truncate: int = 2000):
     """Display tool execution output."""
     if len(output) > truncate:
         output = output[:truncate] + f"\n... [truncated, {len(output)} total chars]"
-    console.print(
-        Panel(
-            Text(output, style="dim"),
-            title=f"[bold green]{agent_id} Output[/bold green]",
-            border_style="green",
-            box=box.SIMPLE,
-            padding=(0, 1),
-        )
-    )
+    for line in output.splitlines() or [""]:
+        console.print(f"[dim]  ⎿ {rich_escape(line)}[/dim]")
 
 
 def show_tool_event(kind: str, title: str, detail: str = "", style: str = "cyan"):
@@ -132,9 +122,9 @@ def show_tool_event(kind: str, title: str, detail: str = "", style: str = "cyan"
     label = kind.upper()
     safe_title = rich_escape(title)
     if detail:
-        console.print(f"[bold {style}]● {label}[/bold {style}] {safe_title} [dim]{rich_escape(detail)}[/dim]")
+        console.print(f"[bold {style}]●[/bold {style}] {label.lower()} {safe_title} [dim]{rich_escape(detail)}[/dim]")
     else:
-        console.print(f"[bold {style}]● {label}[/bold {style}] {safe_title}")
+        console.print(f"[bold {style}]●[/bold {style}] {label.lower()} {safe_title}")
 
 
 def show_agent_message(agent_id: str, message: str):
@@ -144,7 +134,7 @@ def show_agent_message(agent_id: str, message: str):
 
 def show_cyrax_message(message: str):
     """Display a message from the main CYRAX orchestrator."""
-    console.print(f"[bold red]CYRAX[/bold red]: {rich_escape(message)}")
+    console.print(f"[bold red]cyrax[/bold red] [dim]›[/dim] {rich_escape(message)}")
 
 
 def show_spawning_agent(agent_id: str, agent_type: str, task: str):
@@ -295,19 +285,25 @@ _streaming_enabled = True
 _streaming_show_cursor = True
 _streaming_cursor_visible = False
 _streaming_terminal_cursor_hidden = False
+_streaming_delay = 0.006
+_streaming_min_chunk_size = 1
 
 
 def configure_streaming(
     enabled: bool = True,
-    delay: float = 0.0,
-    chunk_size: int = 0,
+    delay: float = 0.006,
+    chunk_size: int = 1,
     show_cursor: bool = True,
 ):
     """Configure assistant response streaming behavior."""
     global _streaming_enabled
     global _streaming_show_cursor
+    global _streaming_delay
+    global _streaming_min_chunk_size
     _streaming_enabled = bool(enabled)
     _streaming_show_cursor = bool(show_cursor)
+    _streaming_delay = max(0.0, float(delay or 0.0))
+    _streaming_min_chunk_size = max(1, int(chunk_size or 1))
 
 
 def start_streaming(agent_id: str):
@@ -317,8 +313,8 @@ def start_streaming(agent_id: str):
     _streaming_active = True
     _streaming_cursor_visible = False
     console.print()
-    console.print(f"[bold red]{agent_id}[/bold red] [dim]responding[/dim]")
-    console.print("[bold red]│[/bold red] ", end="")
+    console.print("[dim]╭─[/dim] [bold red]cyrax[/bold red] [dim]thinking[/dim]")
+    console.print("[dim]│[/dim] ", end="")
     _hide_terminal_cursor()
 
 
@@ -340,7 +336,71 @@ def end_streaming():
     _show_terminal_cursor()
     _streaming_active = False
     console.print()
+    console.print("[dim]╰─[/dim]")
     _streaming_buffer = []
+
+
+class SmoothStream:
+    """Decouple provider chunk arrival from terminal rendering cadence."""
+
+    def __init__(self):
+        self.full_text = []
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._worker: threading.Thread | None = None
+        self._closed = False
+
+    def start(self, agent_id: str = "CYRAX"):
+        start_streaming(agent_id)
+        self._worker = threading.Thread(target=self._render_loop, daemon=True)
+        self._worker.start()
+
+    def feed(self, text: str):
+        if not text:
+            return
+        self.full_text.append(text)
+        if not _streaming_enabled or not console.is_terminal:
+            stream_token(text)
+            return
+        self._queue.put(text)
+
+    def finish(self) -> str:
+        self._closed = True
+        if self._worker and self._worker.is_alive():
+            self._queue.put(None)
+            self._worker.join()
+        end_streaming()
+        return "".join(self.full_text)
+
+    def _render_loop(self):
+        pending = ""
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            pending += item
+            while len(pending) >= _streaming_min_chunk_size:
+                char = pending[0]
+                pending = pending[1:]
+                stream_token(char)
+                self._sleep_for(char)
+        while pending:
+            char = pending[0]
+            pending = pending[1:]
+            stream_token(char)
+            self._sleep_for(char)
+
+    @staticmethod
+    def _sleep_for(char: str):
+        if _streaming_delay <= 0:
+            return
+        pause = _streaming_delay
+        if char in ".!?":
+            pause *= 6
+        elif char in ",;:":
+            pause *= 3
+        elif char == "\n":
+            pause *= 4
+        time.sleep(pause)
 
 
 def _draw_stream_cursor():
@@ -556,8 +616,8 @@ def show_scope_violation(target: str, scope: str):
 
 
 def prompt_user() -> str:
-    """Get input from the user with the CYRAX prompt."""
+    """Get input from the user with the premium operator prompt."""
     try:
-        return console.input("\n[bold red]cyrax[/bold red] [dim]›[/dim] ")
+        return console.input("\n[dim]╭─[/dim] [bold white]user[/bold white]\n[dim]╰─[/dim] ")
     except (EOFError, KeyboardInterrupt):
         return "exit"

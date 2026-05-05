@@ -108,7 +108,7 @@ _PROVIDER_ENV_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "google": "GOOGLE_API_KEY",
-    "xai": "XAI_API_KEY",
+    "xai": "GROK_API_KEY",
     "custom": "CYRAX_API_KEY",
     "vllm": "VLLM_API_KEY",
 }
@@ -116,7 +116,7 @@ _PROVIDER_DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-20250514",
     "openai": "gpt-4o",
     "google": "gemini-1.5-pro",
-    "xai": "grok-2",
+    "xai": "grok-4.3",
     "ollama": "llama3.1:70b",
     "lmstudio": "local-model",
     "vllm": "local-model",
@@ -225,6 +225,12 @@ def _default_config() -> dict:
 def _apply_env_model_defaults(config: dict) -> dict:
     """Fill missing model keys from provider defaults and environment variables."""
     model = config.setdefault("model", {})
+    if (
+        os.environ.get("GROK_API_KEY")
+        and str(model.get("provider", "") or "") in ("", "anthropic")
+        and _is_missing_api_key(str(model.get("api_key", "") or ""))
+    ):
+        model["provider"] = "xai"
     provider = model.get("provider") or "anthropic"
     model["provider"] = provider
     provider_default_model = _PROVIDER_DEFAULT_MODELS.get(provider, "")
@@ -238,10 +244,17 @@ def _apply_env_model_defaults(config: dict) -> dict:
     model.setdefault("temperature", 0.7)
     model.setdefault("max_tokens", 4096)
 
+    if provider == "xai" and os.environ.get("GROK_PRIMARY_MODEL"):
+        model["model_name"] = os.environ["GROK_PRIMARY_MODEL"]
+
     env_var = _PROVIDER_ENV_VARS.get(provider, "")
     api_key = str(model.get("api_key", "") or "")
     if env_var and _is_missing_api_key(api_key):
         env_value = os.environ.get(env_var, "")
+        if env_value:
+            model["api_key"] = env_value
+    if provider == "xai" and _is_missing_api_key(str(model.get("api_key", "") or "")):
+        env_value = os.environ.get("XAI_API_KEY", "")
         if env_value:
             model["api_key"] = env_value
 
@@ -249,6 +262,8 @@ def _apply_env_model_defaults(config: dict) -> dict:
         model.setdefault("api_url", "http://localhost:11434")
     elif provider == "lmstudio":
         model.setdefault("api_url", "http://localhost:1234/v1")
+    elif provider == "xai":
+        model["api_url"] = os.environ.get("GROK_BASE_URL", model.get("api_url") or "https://api.x.ai/v1")
     return config
 
 
@@ -284,6 +299,27 @@ def _find_all_actions(response: str) -> list[tuple[int, str, re.Match]]:
         actions.append((m.start(), 'finding', m))
 
     actions.sort(key=lambda x: x[0])
+    return actions
+
+
+def _find_tool_intent_actions(response: str) -> list[tuple[int, str, object]]:
+    """
+    Recover plain-language tool intents from model output.
+
+    Some providers narrate "invoke tool bash with command is ..." instead of
+    emitting CYRAX action tags. Treat that as a shell execute action so the
+    operator acts instead of ending with zero actions.
+    """
+    actions = []
+    pattern = re.compile(
+        r"invoke\s+tool\s+(?:bash|shell|terminal|execute)\s+"
+        r"(?:with\s+)?(?:command\s+)?(?:is\s+)?(?P<command>[^\n]+)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(response):
+        command = match.group("command").strip()
+        if command:
+            actions.append((match.start(), "execute_text", command))
     return actions
 
 
@@ -798,6 +834,14 @@ RESPONSE STYLE:
                 self.campaign.target = full_url
                 return
 
+        # Look for local paths before domains so /Users/name/repo is treated as a target.
+        local_path_match = re.search(r'(?<!\S)((?:~|/|[A-Za-z]:\\)[^\s,;\'"`<>]+)', message)
+        if local_path_match:
+            target = local_path_match.group(1).rstrip(".,;")
+            self._configure_scope(target)
+            self.campaign.target = target
+            return
+
         # Look for IPs
         ip_match = re.search(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?:/\d{1,2})?)\b', message)
         if ip_match:
@@ -817,6 +861,7 @@ RESPONSE STYLE:
     def _stream_response(self, system_prompt: str) -> str:
         """Stream a model response with real-time display."""
         full_content = []
+        stream = display.SmoothStream()
         stream_buf = display.StreamBuffer()
         first_token = True
 
@@ -841,22 +886,22 @@ RESPONSE STYLE:
                     break
                 delta = chunk.get("delta", "")
                 if delta:
+                    full_content.append(delta)
                     if first_token:
                         spinner.stop()
-                        display.start_streaming("CYRAX")
+                        stream.start("CYRAX")
                         first_token = False
-                    full_content.append(delta)
                     visible = stream_buf.feed(delta)
                     if visible:
-                        display.stream_token(visible)
+                        stream.feed(visible)
         finally:
             if first_token:
                 spinner.stop()
             remaining = stream_buf.flush()
             if remaining:
-                display.stream_token(remaining)
+                stream.feed(remaining)
             if not first_token:
-                display.end_streaming()
+                stream.finish()
 
         # Reset temp boost after successful generation
         self._dedup_temp_boost = 0.0
@@ -1242,6 +1287,8 @@ RESPONSE STYLE:
         from tools.executor import strip_markdown_fences
 
         actions = _find_all_actions(response)
+        if not actions:
+            actions = _find_tool_intent_actions(response)
         action_results = []
 
         # DEF-M07-1: Detect and feed back unclosed/malformed action tags so the
@@ -1278,8 +1325,8 @@ RESPONSE STYLE:
                     self.mission.add_file(file_path)
                     self._cmds_succeeded_this_turn += 1
 
-            elif action_type == "execute":
-                raw_cmd = match.group(1).strip()
+            elif action_type in ("execute", "execute_text"):
+                raw_cmd = match.strip() if action_type == "execute_text" else match.group(1).strip()
                 if not raw_cmd:
                     continue
                 raw_cmd = strip_markdown_fences(raw_cmd)
@@ -2670,11 +2717,26 @@ def chat_cli(args: argparse.Namespace) -> int:
     provider = config.get("model", {}).get("provider", "")
     needs_setup = (
         args.setup
-        or (provider in _API_MODEL_PROVIDERS and _is_missing_api_key(api_key))
+        or (
+            provider in _API_MODEL_PROVIDERS
+            and _is_missing_api_key(api_key)
+            and sys.stdin.isatty()
+        )
     )
 
     if needs_setup:
         config = setup_interactive(config)
+
+    api_key = str(config.get("model", {}).get("api_key", "") or "")
+    provider = config.get("model", {}).get("provider", "")
+    if provider in _API_MODEL_PROVIDERS and _is_missing_api_key(api_key):
+        env_var = _PROVIDER_ENV_VARS.get(provider, "")
+        fallback = "XAI_API_KEY" if provider == "xai" else ""
+        hint = f"Set {env_var}" if env_var else "configure an API key"
+        if fallback:
+            hint += f" or {fallback}"
+        display.show_error(f"Missing API key for provider '{provider}'. {hint}, or run `cyrax init`.")
+        return 2
 
     if not config.get("model", {}).get("provider"):
         display.show_error(
@@ -2703,15 +2765,16 @@ def chat_cli(args: argparse.Namespace) -> int:
             cyrax.shutdown()
         return 0
 
-    use_tui = args.tui and not args.simple and sys.stdin.isatty()
-
     try:
-        if use_tui:
+        if args.tui and sys.stdin.isatty():
             try:
                 from ui.app import CyraxApp
                 app = CyraxApp(cyrax)
                 app.run()
-            except ImportError:
+            except Exception as exc:
+                display.show_warning(
+                    f"TUI unavailable ({exc}). Falling back to the premium terminal operator."
+                )
                 cyrax.run()
         else:
             cyrax.run()
@@ -2741,6 +2804,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--cwd",
         type=str,
         help="Working directory for this command",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="cyrax 1.0.0",
     )
     subparsers = parser.add_subparsers(dest="command")
 

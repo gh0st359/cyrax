@@ -32,8 +32,9 @@ def test_stream_token_writes_model_chunks_directly(monkeypatch):
     display.end_streaming()
 
     rendered = output.getvalue()
-    assert "CYRAX responding" in rendered
+    assert "cyrax thinking" in rendered
     assert "│ hello, operator!" in rendered
+    assert "╰─" in rendered
 
 
 def test_configure_streaming_can_disable_cursor(monkeypatch):
@@ -56,3 +57,19 @@ def test_configure_streaming_can_disable_cursor(monkeypatch):
     assert "one complete chunk" in rendered
     assert "▌" not in rendered
     assert "\x1b[?25l" not in rendered
+
+
+def test_prompt_user_uses_user_identity(monkeypatch):
+    output = StringIO()
+    input_stream = StringIO("/exit\n")
+    monkeypatch.setattr(
+        display,
+        "console",
+        Console(file=output, force_terminal=False, width=100),
+    )
+    monkeypatch.setattr("sys.stdin", input_stream)
+
+    assert display.prompt_user() == "/exit"
+    rendered = output.getvalue()
+    assert "user" in rendered
+    assert "cyrax ›" not in rendered
