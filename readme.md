@@ -9,29 +9,32 @@ An AI-powered autonomous red team operator that thinks, reasons, and operates li
 git clone https://github.com/gh0st359/cyrax-private.git
 cd cyrax-private
 
-# Install dependencies (use python -m pip to avoid path mismatches)
-python -m pip install -r requirements.txt
+# Install the TypeScript backend dependencies
+npm install
 
-# Install browser automation (optional, for web testing features)
-python -m pip install playwright && playwright install chromium
+# Build the CLI
+npm run build
+
+# Optional browser automation support
+npx playwright install chromium
 
 # First time? Run setup to configure your model provider
-python cyrax.py init
+npm run dev -- init
 
-# After that, just type:
-python cyrax.py
+# After that, start CYRAX
+npm run dev -- chat
 ```
 
 ### Installable Package (Optional)
 
-If you prefer a system-wide `cyrax` command:
+If you prefer a local `cyrax` command while developing:
 
 ```bash
-pip install .
+npm link
 
 # Then just run:
 cyrax init      # first time
-cyrax            # after that
+cyrax chat      # after that
 ```
 
 ### Environment Variable Shortcut
@@ -39,13 +42,12 @@ cyrax            # after that
 ```bash
 # Set your API key and skip setup entirely
 export ANTHROPIC_API_KEY="your-key-here"
-python cyrax.py
+npm run dev -- chat
 ```
 
 ## CLI
 
-CYRAX now uses an assistant-ui-inspired command layout for setup, discovery,
-and updates while preserving the original `cyrax` chat entry point.
+CYRAX now runs on a TypeScript/Node backend with an assistant-ui-inspired command layout for setup, discovery, and responsive Claude/Codex-style chat while preserving the original `cyrax` operator entry point.
 
 ```bash
 cyrax init
@@ -99,34 +101,15 @@ Which should I pursue first?
 ## Architecture
 
 ```
-cyrax.py                    # Main orchestrator & entry point
-agents/
-  base_agent.py             # Base agent with autonomous execution loop
-  recon_agent.py            # Reconnaissance specialist
-  exploit_agent.py          # Exploitation specialist
-  post_exploit_agent.py     # Post-exploitation specialist
-  ad_agent.py               # Active Directory specialist
-  web_agent.py              # Web application specialist
-  cloud_agent.py            # Cloud infrastructure specialist
-  osint_agent.py            # OSINT specialist
-models/
-  model_manager.py          # Unified model interface
-  api_providers.py          # OpenAI, Anthropic, Google, xAI clients
-  local_providers.py        # Ollama, LM Studio, vLLM clients
-tools/
-  executor.py               # Command execution engine
-  tool_registry.py          # Tool catalog with 60+ tools
-  browser.py                # Playwright browser automation (33 commands)
-memory/
-  conversation.py           # Conversation history management
-  knowledge_base.py         # Persistent findings/credentials store
-  campaign_state.py         # Engagement state tracking
-utils/
-  display.py                # Rich terminal UI
-  logging.py                # Engagement logging
-config/
-  config.example.yaml       # Example configuration
-  prompts/                  # System prompt templates
+src/cli.ts                  # Commander-based CLI entry point
+src/orchestrator.ts         # Main operator loop and action execution
+src/agents/                 # Recon, exploit, post, AD, web, cloud, OSINT agents
+src/models/                 # Anthropic, OpenAI/xAI/custom, Google, Ollama clients
+src/tools/                  # Shell executor, tool registry, Playwright browser automation
+src/memory/                 # Conversation, campaign, mission, knowledge stores
+src/utils/                  # Safety/scope, action parsing, display, logging
+src/config/                 # Typed config defaults and YAML loader
+tests/ts/                   # Vitest coverage for the TypeScript backend
 ```
 
 ## Interactive Commands
@@ -151,7 +134,7 @@ config/
 
 ## Configuration
 
-Copy `config/config.example.yaml` to `config/config.yaml` and configure:
+Copy `config/config.example.yaml` to `config/config.yaml`, or run `cyrax configure`, and configure:
 
 - **Model provider and credentials**
 - **Tool execution settings** (timeouts, working directory)
@@ -185,3 +168,18 @@ Before cutting a release, run this checklist:
 - [ ] Run lint checks (project-standard linter/formatters)
 - [ ] Execute a smoke campaign against an authorized test target
 - [ ] Export and archive the campaign report/artifacts for review
+
+
+## TypeScript Backend
+
+The `upgrade` branch migrates the backend runtime to TypeScript. The Python implementation remains in-tree during the transition for compatibility and regression reference, while CI now validates both the existing Python tests and the new Vitest/TypeScript suite.
+
+Useful developer commands:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm run dev -- status --show-config
+npm run dev -- tools --available
+```
