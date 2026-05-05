@@ -7,6 +7,7 @@ and require user confirmation for dangerous actions.
 import re
 import threading
 import ipaddress
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -25,6 +26,7 @@ class ScopeEnforcer:
         self.allowed_wildcard_domains: list[str] = []
         self.allowed_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
         self.allowed_ips: set[str] = set()
+        self.allowed_paths: list[Path] = []
         self.enabled = False
         self._raw_targets: list[str] = []
 
@@ -32,12 +34,36 @@ class ScopeEnforcer:
             self._parse_targets(targets)
             self.enabled = True
 
+    def reset(self, targets: Optional[list[str]] = None):
+        """Replace the current scope with a new set of targets."""
+        self.allowed_domains.clear()
+        self.allowed_wildcard_domains.clear()
+        self.allowed_ip_ranges.clear()
+        self.allowed_ips.clear()
+        self.allowed_paths.clear()
+        self._raw_targets = []
+        self.enabled = False
+        if targets:
+            self._parse_targets(targets)
+            self.enabled = True
+
+    def add_targets(self, targets: list[str]):
+        """Extend the current scope with additional targets."""
+        if targets:
+            self._parse_targets(targets)
+            self.enabled = True
+
     def _parse_targets(self, targets: list[str]):
         """Parse target specifications into domains, IPs, and CIDR ranges."""
-        self._raw_targets = list(targets)
         for target in targets:
             target = target.strip()
             if not target:
+                continue
+            if target not in self._raw_targets:
+                self._raw_targets.append(target)
+
+            if self._looks_like_local_path(target):
+                self.allowed_paths.append(Path(target).expanduser().resolve())
                 continue
 
             # CIDR notation (e.g., 192.168.1.0/24)
@@ -74,6 +100,22 @@ class ScopeEnforcer:
 
             # Plain domain or hostname
             self._add_domain(target)
+
+    def _looks_like_local_path(self, target: str) -> bool:
+        """Return True for Unix, home-relative, or Windows local paths."""
+        return (
+            target.startswith(("/", "~/", "./", "../"))
+            or re.match(r"^[A-Za-z]:[\\/]", target) is not None
+        )
+
+    def _is_path_allowed(self, path_str: str) -> bool:
+        if not self.allowed_paths:
+            return False
+        try:
+            path = Path(path_str).expanduser().resolve()
+        except Exception:
+            return False
+        return any(path == allowed or allowed in path.parents for allowed in self.allowed_paths)
 
     def _add_domain(self, domain: str):
         """Add a domain, also checking if it's an IP."""
@@ -143,8 +185,26 @@ class ScopeEnforcer:
         # Check domain
         return self._is_domain_allowed(host)
 
+    def is_path_in_scope(self, path_str: str) -> bool:
+        """Check whether a local filesystem path is in the authorized workspace scope."""
+        if not self.enabled:
+            return True
+        return self._is_path_allowed(path_str)
+
     def _check_text_for_scope(self, text: str) -> tuple[bool, str]:
         """Run scope extraction checks on arbitrary text."""
+        local_paths = re.findall(r'(?<!\S)((?:~|/|[A-Za-z]:[\\/])[^ \n\r\t,;\'"`<>]+)', text)
+        for path in local_paths:
+            path = path.rstrip(".,;)")
+            if path in ("/", "/tmp", "/var/tmp"):
+                continue
+            if self.allowed_paths and not self._is_path_allowed(path):
+                return False, (
+                    f"Path '{path}' is NOT in your active workspace scope. "
+                    f"Your targets are: {', '.join(self._raw_targets)}. "
+                    "Use /scope <path> or /add-dir <path> to switch or add a workspace."
+                )
+
         urls = re.findall(r'https?://[^\s\'"]+', text)
         for url in urls:
             parsed = urlparse(url)
