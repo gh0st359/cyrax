@@ -34,13 +34,55 @@ def show_banner():
     console.print(
         Panel(
             Text(BANNER, style="bold red", justify="center"),
-            title="[bold white]CYRAX v1.0[/bold white]",
-            subtitle="[bold white]Autonomous Red Team Operator[/bold white]",
+            title="[bold white]CYRAX[/bold white] [dim]autonomous red-team operator[/dim]",
+            subtitle="[dim]natural language in, scoped operations out[/dim]",
             border_style="red",
-            box=box.DOUBLE,
+            box=box.ROUNDED,
             padding=(0, 2),
         )
     )
+    console.print()
+
+
+def show_session_intro(
+    provider: str,
+    model: str,
+    scope: str,
+    permission_mode: str,
+    streaming: bool = True,
+):
+    """Display a compact Claude-style session orientation panel."""
+    status = Table.grid(padding=(0, 2))
+    status.add_column(style="bold")
+    status.add_column()
+    status.add_row("model", f"{provider or 'unconfigured'}/{model or 'unconfigured'}")
+    status.add_row("scope", scope or "not set")
+    status.add_row("permissions", permission_mode)
+    status.add_row("streaming", "on" if streaming else "off")
+
+    tips = Text()
+    tips.append("Type a target or task. ", style="white")
+    tips.append("/help", style="bold cyan")
+    tips.append(" commands · ")
+    tips.append("/status", style="bold cyan")
+    tips.append(" state · ")
+    tips.append("/auto", style="bold cyan")
+    tips.append(" autonomous · ")
+    tips.append("/pause", style="bold cyan")
+    tips.append(" save/stop · ")
+    tips.append("Ctrl+C", style="bold cyan")
+    tips.append(" interrupt")
+
+    console.print(
+        Panel(
+            status,
+            title="[bold red]session[/bold red]",
+            border_style="red",
+            box=box.ROUNDED,
+            padding=(0, 1),
+        )
+    )
+    console.print(tips)
     console.print()
 
 
@@ -83,6 +125,16 @@ def show_tool_output(agent_id: str, output: str, truncate: int = 2000):
             padding=(0, 1),
         )
     )
+
+
+def show_tool_event(kind: str, title: str, detail: str = "", style: str = "cyan"):
+    """Display a compact one-line tool/status event."""
+    label = kind.upper()
+    safe_title = rich_escape(title)
+    if detail:
+        console.print(f"[bold {style}]● {label}[/bold {style}] {safe_title} [dim]{rich_escape(detail)}[/dim]")
+    else:
+        console.print(f"[bold {style}]● {label}[/bold {style}] {safe_title}")
 
 
 def show_agent_message(agent_id: str, message: str):
@@ -193,6 +245,39 @@ def show_info(message: str):
 def show_success(message: str):
     """Display a success message."""
     console.print(f"[bold green]SUCCESS:[/bold green] {rich_escape(message)}")
+
+
+def show_help(commands: list[tuple[str, str, str]]):
+    """Display slash commands in a compact searchable table."""
+    table = Table(
+        title="CYRAX Commands",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold red",
+    )
+    table.add_column("Command", style="bold cyan", no_wrap=True)
+    table.add_column("Args", style="yellow")
+    table.add_column("Description")
+    for command, args, description in commands:
+        table.add_row(command, args, description)
+    console.print(table)
+
+
+def show_turn_summary(actions: int, succeeded: int, tokens: dict, agents: int = 0):
+    """Show a compact end-of-turn activity summary."""
+    token_total = tokens.get("total_tokens", 0)
+    detail = f"{actions} action(s), {succeeded} succeeded, {agents} agent(s), {token_total} tokens"
+    show_tool_event("turn", "complete", detail, style="green")
+
+
+def show_compact_summary(removed: int, remaining: int):
+    """Show context compaction result."""
+    show_tool_event(
+        "compact",
+        f"summarized {removed} old message(s)",
+        f"{remaining} recent message(s) kept",
+        style="magenta",
+    )
 
 
 def get_spinner(text: str = "Working...") -> Live:
@@ -473,6 +558,6 @@ def show_scope_violation(target: str, scope: str):
 def prompt_user() -> str:
     """Get input from the user with the CYRAX prompt."""
     try:
-        return console.input("\n[bold white]> [/bold white]")
+        return console.input("\n[bold red]cyrax[/bold red] [dim]›[/dim] ")
     except (EOFError, KeyboardInterrupt):
         return "exit"

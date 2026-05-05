@@ -41,10 +41,13 @@ if HAS_TEXTUAL:
         """
 
         CSS = """
+        Screen {
+            background: $surface;
+        }
         #output {
             height: 1fr;
             overflow-y: scroll;
-            border: solid green;
+            border: solid red;
             padding: 0 1;
         }
         #status-bar {
@@ -90,11 +93,15 @@ if HAS_TEXTUAL:
             # Show banner
             output.write(
                 Panel(
-                    "[bold red]CYRAX[/bold red] - Autonomous AI Red Team Operator\n"
-                    "Type a target to begin. Use /help for available commands.",
+                    "[bold red]CYRAX[/bold red] autonomous red-team operator\n"
+                    "[dim]Type a target or task. /help commands · /status state · Ctrl+C interrupt[/dim]",
                     border_style="red",
                     box=box.DOUBLE,
                 )
+            )
+            output.write(
+                "[dim]Modes:[/dim] /mode auto for uninterrupted operations, "
+                "/compact to summarize context, /pause to save and stop"
             )
 
             # Show scope info if configured
@@ -167,7 +174,7 @@ if HAS_TEXTUAL:
                 current_input = pending_input
                 pending_input = None
                 self._ai_running = True
-                self.call_from_thread(status.update, "AI thinking...")
+                self.call_from_thread(status.update, f"running · turn {self._turn_count + 1}")
 
                 try:
                     self.orchestrator.chat(current_input)
@@ -217,7 +224,11 @@ if HAS_TEXTUAL:
                     break
                 finally:
                     self._ai_running = False
-                    self.call_from_thread(status.update, "Ready")
+                    mode_fn = getattr(self.orchestrator, "_current_mode_label", None)
+                    scope_fn = getattr(self.orchestrator, "_session_scope_label", None)
+                    mode = mode_fn() if mode_fn else "interactive"
+                    scope = scope_fn() if scope_fn else "active"
+                    self.call_from_thread(status.update, f"ready · {mode} · {scope}")
 
         def action_pause(self) -> None:
             """Ctrl+C handler — pause the current operation."""

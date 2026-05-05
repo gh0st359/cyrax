@@ -847,7 +847,7 @@ class BrowserManager:
                 )
 
                 status = "VULNERABLE" if fired else ("REFLECTED" if in_dom else "blocked")
-                results.append(f"  Payload {i+1}: {status} - {payload[:60]}")
+                results.append(f"  Payload {i + 1}: {status} - {payload[:60]}")
 
                 if fired:
                     # Reset for next test

@@ -66,6 +66,20 @@ class ConversationMemory:
         # Keep the summary message + recent messages
         self.messages = self.messages[cutoff:]
 
+    def compact(self, keep_recent: int = 12) -> int:
+        """Summarize older messages and keep the most recent context in memory."""
+        if keep_recent < 1:
+            keep_recent = 1
+        if len(self.messages) <= keep_recent:
+            return 0
+
+        old_messages = self.messages[:-keep_recent]
+        facts = self._extract_facts(old_messages)
+        if facts:
+            self.summary += f"\n{facts}" if self.summary else facts
+        self.messages = self.messages[-keep_recent:]
+        return len(old_messages)
+
     def _extract_facts(self, messages: list[dict]) -> str:
         """Extract key facts from messages — commands, findings, errors."""
         facts = []
