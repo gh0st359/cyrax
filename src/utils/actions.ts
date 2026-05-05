@@ -30,6 +30,27 @@ export function findAllActions(response: string): ActionMatch[] {
   return actions.sort((left, right) => left.index - right.index);
 }
 
+export function findToolIntentActions(response: string): ActionMatch[] {
+  const actions: ActionMatch[] = [];
+  const patterns = [
+    /\b(?:invoke|use|call)\s+(?:the\s+)?(?:tool\s+)?(?:bash|shell|terminal)(?:\s+with)?\s+(?:command\s+)?(?:is|:)\s*(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([^\n]+))/gi,
+    /^\s*(?:bash|shell|terminal)\s*:\s*(?:`([^`]+)`|"([^"]+)"|'([^']+)'|([^\n]+))/gim,
+  ];
+  for (const pattern of patterns) {
+    for (const match of response.matchAll(pattern)) {
+      const command = match.slice(1).find((value) => value)?.trim();
+      if (!command) continue;
+      actions.push({
+        index: match.index ?? 0,
+        kind: 'execute',
+        groups: [command.replace(/[.。]\s*$/, '')],
+        raw: match[0],
+      });
+    }
+  }
+  return actions.sort((left, right) => left.index - right.index);
+}
+
 export function findUnclosedTags(response: string): string[] {
   const paired: Array<[string, RegExp, RegExp]> = [
     ['EXECUTE', /\[EXECUTE\]/g, /\[\/EXECUTE\]/g],

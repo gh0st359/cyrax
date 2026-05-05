@@ -9,7 +9,7 @@ import { ToolExecutor } from './tools/executor.js';
 import { ToolRegistry } from './tools/registry.js';
 import { BrowserManager, isBrowserCommand } from './tools/browser.js';
 import { AgentPool, AgentType } from './agents/pool.js';
-import { findAllActions, findUnclosedTags } from './utils/actions.js';
+import { findAllActions, findToolIntentActions, findUnclosedTags } from './utils/actions.js';
 import { PermissionGate, ScopeEnforcer } from './utils/safety.js';
 import { platformContext } from './utils/platform.js';
 import { EngagementLogger } from './utils/logger.js';
@@ -32,6 +32,7 @@ export class CyraxOrchestrator {
   private pauseRequested = false;
   private actionsExecutedThisTurn = 0;
   private cmdsSucceededThisTurn = 0;
+  private tokensThisTurn = 0;
 
   constructor(readonly config: CyraxConfig, options: { scopeTargets?: string[]; auto?: boolean; campaignName?: string; objective?: string } = {}) {
     this.scope = new ScopeEnforcer(options.scopeTargets ?? []);
@@ -54,6 +55,7 @@ export class CyraxOrchestrator {
     this.conversation.addMessage('user', userMessage);
     this.actionsExecutedThisTurn = 0;
     this.cmdsSucceededThisTurn = 0;
+    this.tokensThisTurn = 0;
     if (!this.scope.enabled) this.tryExtractTarget(userMessage);
     let response: string;
     try {
@@ -65,7 +67,9 @@ export class CyraxOrchestrator {
     }
     this.conversation.addMessage('assistant', response);
     this.logger.conversation('assistant', response);
-    return this.processResponse(response);
+    const final = await this.processResponse(response);
+    display.turnSummary(this.actionsExecutedThisTurn, this.cmdsSucceededThisTurn, Object.keys(this.agentPool.getStatus()).length, this.tokensThisTurn);
+    return final;
   }
 
   handleCommand(command: string): string {
@@ -123,23 +127,67 @@ export class CyraxOrchestrator {
   private buildSystemPrompt(): string {
     const target = this.campaign.target;
     if (!target) {
-      return `You are CYRAX, an autonomous AI red team operator for authorized penetration testing.\n\nNo target has been set yet. Respond conversationally. Do NOT execute commands.\n\nStyle: skilled operator, short, direct, no filler.\n\n${platformContext()}`;
+      return `You are CYRAX, an autonomous AI red team operator for authorized penetration testing.
+
+If the user asks whether you can operate locally, answer yes. If the user gives a local path, repository path, URL, host, or IP to inspect, treat it as the active target and immediately use action blocks.
+
+ACTION FORMAT:
+You must use exact executable tags when work requires the machine: [EXECUTE]command[/EXECUTE]. Do not narrate tool calls as plain text. Never write phrases like "invoke tool bash" or "command is" unless they are inside [EXECUTE] tags.
+
+Style: skilled operator, short, direct, no filler.
+
+${platformContext()}`;
     }
     const activeAgents = Object.values(this.agentPool.getStatus()).filter((a) => ['active', 'starting'].includes(a.status)).map((a) => `${a.id}: ${a.status} - ${a.task}`).join('\n') || 'none';
-    return `You are CYRAX, an autonomous AI red team operator for authorized penetration testing.\n\nTARGET: ${target}\nSCOPE: ${this.scope.getScopeDescription()}\nMODE: ${this.currentModeLabel()}\n\nMISSION MEMORY:\n${this.mission.buildContextBlock()}\n\nCAMPAIGN STATE:\n${this.campaign.summary()}\n\nKNOWLEDGE:\n${this.knowledge.getSummary()}\n\nACTIVE AGENTS:\n${activeAgents}\n\nTOOLS:\n${this.tools.getAvailableToolsSummary()}\n\nACTION FORMAT:\nUse [EXECUTE]command[/EXECUTE], [WRITE_FILE path="relative/path"]content[/WRITE_FILE], [SPAWN type="recon|exploit|post|web|cloud|ad|osint"]task[/SPAWN], [STORE category="x" key="y"]json[/STORE], [FINDING severity="low|medium|high|critical" title="..."]details[/FINDING], [KILL agent="id"].\n\nOperate continuously until the objective is complete, paused, or blocked. Keep output concise and avoid markdown headings.\n\n${platformContext()}`;
+    return `You are CYRAX, an autonomous AI red team operator for authorized penetration testing.
+
+TARGET: ${target}
+SCOPE: ${this.scope.getScopeDescription()}
+MODE: ${this.currentModeLabel()}
+
+MISSION MEMORY:
+${this.mission.buildContextBlock()}
+
+CAMPAIGN STATE:
+${this.campaign.summary()}
+
+KNOWLEDGE:
+${this.knowledge.getSummary()}
+
+ACTIVE AGENTS:
+${activeAgents}
+
+TOOLS:
+${this.tools.getAvailableToolsSummary()}
+
+ACTION FORMAT:
+Use exact executable tags: [EXECUTE]command[/EXECUTE], [WRITE_FILE path="relative/path"]content[/WRITE_FILE], [SPAWN type="recon|exploit|post|web|cloud|ad|osint"]task[/SPAWN], [STORE category="x" key="y"]json[/STORE], [FINDING severity="low|medium|high|critical" title="..."]details[/FINDING], [KILL agent="id"].
+
+If you say you are scanning, checking, testing, reading, listing, or analyzing a target, include the needed [EXECUTE] or browser.* action in the same response. Do not describe tool usage in natural language. Never output "invoke tool bash with command is ..."; output [EXECUTE]...[/EXECUTE].
+
+Operate continuously until the objective is complete, paused, or blocked. Keep output concise and avoid markdown headings.
+
+${platformContext()}`;
   }
 
   private async streamResponse(systemPrompt: string): Promise<string> {
-    const chunks: string[] = [];
+    display.showAssistantStart();
+    const renderer = new display.SmoothStreamRenderer({
+      enabled: this.config.display.streaming,
+      delayMs: this.config.display.stream_delay_ms,
+      minBatchChars: this.config.display.stream_min_chunk_chars,
+      maxBufferedChars: this.config.display.stream_max_buffered_chars,
+    });
     for await (const event of this.model.generateStream(systemPrompt, this.conversation.getContext())) {
       if (event.delta) {
-        chunks.push(event.delta);
-        if (this.config.display.streaming) display.streamChunk(event.delta);
+        renderer.addPart(event.delta);
       }
-      if (event.done && event.content && chunks.length === 0) chunks.push(event.content);
+      if (event.done && event.tokensOut) this.tokensThisTurn += event.tokensOut;
+      if (event.done && event.content) break;
     }
-    if (this.config.display.streaming) display.streamEnd();
-    return chunks.join('');
+    const content = await renderer.done();
+    display.showAssistantEnd();
+    return content;
   }
 
   private async processResponse(response: string): Promise<string> {
@@ -155,8 +203,8 @@ export class CyraxOrchestrator {
       const results = await this.executeActions(current);
       this.mission.extractFromResponse(current);
       if (results.length === 0) {
-        if (this.campaign.target && depth === 0 && this.actionsExecutedThisTurn === 0 && /\b(scan|check|test|enumerate|run|try)\b/i.test(current)) {
-          this.conversation.addMessage('user', '[Action Feedback] You promised action but executed none. Reply with immediate action blocks now.');
+        if (this.campaign.target && depth === 0 && this.actionsExecutedThisTurn === 0 && this.promisedAction(current)) {
+          this.conversation.addMessage('user', '[Action Feedback] You promised action but executed none. Reply now with only the immediate [EXECUTE]...[/EXECUTE] or browser.* action blocks needed to continue. Do not describe the tool call in prose.');
           current = await this.streamResponse(this.buildSystemPrompt());
           this.conversation.addMessage('assistant', current);
           accumulated += `\n\n${current}`;
@@ -179,9 +227,13 @@ export class CyraxOrchestrator {
     const unclosed = findUnclosedTags(response);
     if (unclosed.length) return [`[Action Feedback]\nMalformed action tags:\n${unclosed.join('\n')}`];
     const results: string[] = [];
-    for (const action of findAllActions(response)) {
+    const actions = findAllActions(response);
+    const executableActions = actions.length > 0 ? actions : findToolIntentActions(response);
+    for (const action of executableActions) {
+      let actionCounted = false;
       if (action.kind === 'execute') {
         const command = action.groups[0]?.trim() ?? '';
+        if (!command) continue;
         const permission = this.permissionGate.check(command);
         if (!permission[0]) {
           results.push(`[Action Blocked]\n${permission[1]}`);
@@ -192,12 +244,15 @@ export class CyraxOrchestrator {
         const output = 'output' in result ? result.output : `${result.stdout}${result.stderr ? `\n${result.stderr}` : ''}`.trim();
         if ('success' in result && result.success) this.cmdsSucceededThisTurn += 1;
         this.actionsExecutedThisTurn += 1;
+        actionCounted = true;
         display.showToolEvent('Output', command, output.slice(0, 4000), 'green');
         results.push(output || 'OK');
       }
       if (action.kind === 'write_file') {
         const result = this.executor.writeFile(action.groups[0] ?? '', action.groups[1] ?? '');
         this.actionsExecutedThisTurn += 1;
+        actionCounted = true;
+        if (result.success) this.cmdsSucceededThisTurn += 1;
         results.push(result.success ? result.stdout : result.stderr);
       }
       if (action.kind === 'spawn') {
@@ -221,15 +276,22 @@ export class CyraxOrchestrator {
       if (action.kind === 'kill') {
         results.push(this.agentPool.kill(action.groups[0] ?? '') ? `Killed ${action.groups[0]}` : `Agent not found: ${action.groups[0]}`);
       }
+      if (!actionCounted && action.kind !== 'execute') this.actionsExecutedThisTurn += 1;
     }
     return results;
   }
 
   private tryExtractTarget(message: string): void {
     const url = message.match(/https?:\/\/[^\s'"`<>]+/)?.[0];
+    const localPath = message.match(/(?:^|\s)((?:~|\/|[A-Za-z]:\\)[^\s'"`<>]+)/)?.[1];
     const domain = message.match(/\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b/)?.[0];
     const ip = message.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)?.[0];
-    const target = url ?? domain ?? ip;
+    const target = url ?? localPath ?? domain ?? ip;
     if (target) this.campaign.setTarget(target, this.campaign.objective);
+  }
+
+  private promisedAction(response: string): boolean {
+    return /\b(scanning|scan|checking|check|testing|test|enumerating|enumerate|running|run|reading|read|listing|list|analyzing|analyse|analyze|inspect|looking at|try)\b/i.test(response)
+      || findToolIntentActions(response).length > 0;
   }
 }

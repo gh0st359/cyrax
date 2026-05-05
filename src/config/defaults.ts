@@ -53,6 +53,9 @@ export const CyraxConfigSchema = z.object({
   display: z.object({
     show_reasoning: z.boolean().default(true),
     streaming: z.boolean().default(true),
+    stream_delay_ms: z.number().int().nonnegative().default(5),
+    stream_min_chunk_chars: z.number().int().positive().default(1),
+    stream_max_buffered_chars: z.number().int().positive().default(320),
     show_raw_output: z.boolean().default(false),
     theme: z.string().default('dark'),
   }).default({}),
@@ -83,7 +86,7 @@ export function defaultConfig(): CyraxConfig {
     tools: { timeout: 300, allow_dangerous: false, work_dir: defaultWorkDir() },
     memory: { db_path: 'data/cyrax.db', max_history: 50 },
     logging: { log_dir: 'logs', level: 'INFO', engagement_logging: true },
-    display: { show_reasoning: true, streaming: true, show_raw_output: false, theme: 'dark' },
+    display: { show_reasoning: true, streaming: true, stream_delay_ms: 5, stream_min_chunk_chars: 1, stream_max_buffered_chars: 320, show_raw_output: false, theme: 'dark' },
     safety: { auto_approve: false },
     campaign: { data_dir: 'data/campaigns', status_interval: 5 },
   });
