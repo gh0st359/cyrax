@@ -54,10 +54,12 @@ cyrax status --show-config
 cyrax tools --available
 cyrax preflight
 cyrax chat --scope example-company.com --campaign example
+cyrax chat "recon example-company.com" --print --auto
 ```
 
 Top-level chat flags such as `--setup`, `--campaign`, `--scope`, `--auto`,
-`--tui`, and `--simple` continue to work for backwards compatibility.
+`--tui`, `--simple`, and one-shot prompt execution continue to work for
+backwards compatibility.
 
 ## How It Works
 
@@ -66,10 +68,11 @@ Talk to CYRAX like you're talking to a senior pentester:
 ```
 CYRAX: Ready. What's the target?
 
-> I need you to test example-company.com
+cyrax › I need you to test example-company.com
 
 CYRAX: Let me start by mapping their attack surface...
-[spawns reconnaissance agent, discovers subdomains, scans services]
+● RUN nmap -sV example-company.com
+● SHELL nmap -sV example-company.com 22/tcp open ssh
 
 CYRAX: Found 127 subdomains, 3 interesting targets:
 - jenkins.example-company.com (potentially unauthenticated)
@@ -131,6 +134,13 @@ config/
 | Command      | Description                    |
 |-------------|--------------------------------|
 | `/status`   | Show campaign status           |
+| `/config`   | Show runtime config (redacted) |
+| `/model`    | Show or switch model name      |
+| `/mode`     | Show or switch permission mode |
+| `/scope`    | Show or update target scope    |
+| `/auto`     | Enable autonomous permissions  |
+| `/compact`  | Summarize older context        |
+| `/clear`    | Clear conversation context     |
 | `/agents`   | List active agents             |
 | `/findings` | Show all security findings     |
 | `/creds`    | Show discovered credentials    |

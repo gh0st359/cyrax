@@ -632,6 +632,46 @@ class CyraxOrchestrator:
                 pass
         return "\n".join(parts)
 
+    def _session_scope_label(self) -> str:
+        """Return a human-readable scope label for session status."""
+        if self.scope.enabled:
+            return self.scope.get_scope_description()
+        if self.campaign.target:
+            return str(self.campaign.target)
+        return "not set"
+
+    def _current_mode_label(self) -> str:
+        """Return the current operator permission mode label."""
+        if self.permission_gate.auto_approve:
+            return "auto"
+        return self.permission_gate.policy_mode
+
+    def _slash_commands(self) -> list[tuple[str, str, str]]:
+        """Return supported interactive commands for help rendering."""
+        return [
+            ("/status", "", "Show campaign, model, permissions, and scope"),
+            ("/config", "", "Show active provider/model/workdir without secrets"),
+            ("/model", "[name]", "Show or switch the current model name"),
+            ("/scope", "[target]", "Show or update authorized target scope"),
+            ("/mode", "[auto|interactive|ci]", "Show or switch permission mode"),
+            ("/approve", "<category>", "Pre-approve an action category"),
+            ("/auto", "", "Enable fully autonomous mode"),
+            ("/compact", "[keep]", "Summarize older conversation context"),
+            ("/clear", "", "Clear conversation context"),
+            ("/agents", "", "List background agents"),
+            ("/kill", "<id>", "Kill one agent"),
+            ("/killall", "", "Kill all agents"),
+            ("/dashboard", "", "Show tmux dashboard info"),
+            ("/findings", "", "Show security findings"),
+            ("/creds", "", "Show discovered credentials"),
+            ("/hosts", "", "Show discovered hosts"),
+            ("/usage", "", "Show model token usage"),
+            ("/export", "", "Export findings report"),
+            ("/pause", "", "Pause campaign and save state"),
+            ("/help", "", "Show this command menu"),
+            ("/exit", "", "Exit CYRAX"),
+        ]
+
     def _build_system_prompt(self) -> str:
         """Build the system prompt — lean, front-loaded, with dynamic target substitution."""
         available_tools = self.tools.get_available_tools_summary()
@@ -1227,7 +1267,8 @@ RESPONSE STYLE:
                 content = strip_markdown_fences(match.group(2).strip())
                 self._actions_executed_this_turn += 1
                 result = self.tools.executor.write_file(file_path, content)
-                display.show_tool_output("CYRAX", result.output)
+                style = "green" if result.success else "red"
+                display.show_tool_event("write", file_path, result.output[:120], style=style)
                 action_results.append(
                     f"[File Write Result for: {file_path}]\n"
                     f"Success: {result.success}\n"
@@ -1266,12 +1307,12 @@ RESPONSE STYLE:
                         continue
                     self._recent_cmds_this_turn.append(command)
 
-                    display.show_execution("CYRAX", command)
+                    display.show_tool_event("run", command)
 
                     # Check repeated failure (progressive backoff)
                     blocked_msg = self._check_repeated_failure(command)
                     if blocked_msg:
-                        display.show_tool_output("CYRAX", blocked_msg)
+                        display.show_tool_event("blocked", command, blocked_msg, style="yellow")
                         action_results.append(f"[Tool Result for: {command}]\n{blocked_msg}")
                         continue
 
@@ -1281,7 +1322,7 @@ RESPONSE STYLE:
                             "Error: Browser commands cannot be piped/chained with shell operators.\n"
                             "Run browser commands in their own [EXECUTE] blocks, then process output in a separate shell command."
                         )
-                        display.show_tool_output("CYRAX", error_msg)
+                        display.show_tool_event("error", command, error_msg, style="red")
                         action_results.append(f"[Tool Result for: {command}]\n{error_msg}")
                         self._record_failure(command, error_msg)
                         continue
@@ -1294,7 +1335,7 @@ RESPONSE STYLE:
                         sig_error = validate_browser_command(method_name, args, kwargs)
                         if sig_error:
                             msg = f"[Tool Result for: {command}]\nError: {sig_error}"
-                            display.show_tool_output("CYRAX", f"Error: {sig_error}")
+                            display.show_tool_event("error", command, sig_error, style="red")
                             action_results.append(msg)
                             self._record_failure(command, sig_error)
                             continue
@@ -1304,7 +1345,7 @@ RESPONSE STYLE:
                             allowed, reason = self.scope.check_browser_navigation(args[0])
                             if not allowed:
                                 scope_msg = f"[Scope Violation] {reason}"
-                                display.show_tool_output("CYRAX", scope_msg)
+                                display.show_tool_event("blocked", command, scope_msg, style="yellow")
                                 action_results.append(f"[Tool Result for: {command}]\n{scope_msg}")
                                 # DEF-M09-1: Persist scope violations to JSONL audit trail
                                 self.logger.log_event("scope_violation", "CYRAX", {
@@ -1318,7 +1359,7 @@ RESPONSE STYLE:
                         perm_ok, perm_reason = self.permission_gate.check(command)
                         if not perm_ok:
                             perm_msg = f"[Permission Denied] {perm_reason}"
-                            display.show_tool_output("CYRAX", perm_msg)
+                            display.show_tool_event("denied", command, perm_reason, style="yellow")
                             action_results.append(
                                 f"[Tool Result for: {command}]\n{perm_msg}\n"
                                 "The user declined this action. Try a different approach or ask for guidance."
@@ -1342,7 +1383,8 @@ RESPONSE STYLE:
                                 self._actions_executed_this_turn += 1
                                 with display.get_spinner("Executing..."):
                                     br_result = method(*args, **kwargs)
-                                display.show_tool_output("CYRAX", br_result.output)
+                                style = "green" if br_result.success else "red"
+                                display.show_tool_event("browser", command, br_result.output[:160], style=style)
                                 self.logger.log_command(
                                     "CYRAX", command, br_result.output,
                                     0 if br_result.success else 1,
@@ -1363,7 +1405,7 @@ RESPONSE STYLE:
                                     self._record_failure(command, br_result.error or br_result.output)
                             except Exception as e:
                                 error_msg = f"Browser error: {e}"
-                                display.show_tool_output("CYRAX", error_msg)
+                                display.show_tool_event("error", command, error_msg, style="red")
                                 guidance = _get_failure_guidance(command, str(e))
                                 action_results.append(
                                     f"[Tool Result for: {command}]\nError: {error_msg}\n{guidance}"
@@ -1377,7 +1419,7 @@ RESPONSE STYLE:
                                 f"Valid methods: {valid_methods}\n"
                                 f"For SQL injection testing, use sqlmap or write a Python script."
                             )
-                            display.show_tool_output("CYRAX", error_msg)
+                            display.show_tool_event("error", command, error_msg, style="red")
                             action_results.append(
                                 f"[Tool Result for: {command}]\n{error_msg}"
                             )
@@ -1391,7 +1433,7 @@ RESPONSE STYLE:
                             f"Valid methods: {valid_methods}\n"
                             f"Do NOT invent browser methods."
                         )
-                        display.show_tool_output("CYRAX", error_msg)
+                        display.show_tool_event("error", command, error_msg, style="red")
                         action_results.append(
                             f"[Tool Result for: {command}]\n{error_msg}"
                         )
@@ -1401,7 +1443,7 @@ RESPONSE STYLE:
                         scope_ok, scope_reason = self.scope.check_command(command)
                         if not scope_ok:
                             scope_msg = f"[Scope Violation] {scope_reason}"
-                            display.show_tool_output("CYRAX", scope_msg)
+                            display.show_tool_event("blocked", command, scope_msg, style="yellow")
                             action_results.append(f"[Tool Result for: {command}]\n{scope_msg}")
                             # DEF-M09-1: Persist scope violations to JSONL audit trail
                             self.logger.log_event("scope_violation", "CYRAX", {
@@ -1415,7 +1457,7 @@ RESPONSE STYLE:
                         perm_ok, perm_reason = self.permission_gate.check(command)
                         if not perm_ok:
                             perm_msg = f"[Permission Denied] {perm_reason}"
-                            display.show_tool_output("CYRAX", perm_msg)
+                            display.show_tool_event("denied", command, perm_reason, style="yellow")
                             action_results.append(f"[Tool Result for: {command}]\n{perm_msg}")
                             # DEF-M09-1: Persist permission denials to JSONL audit trail
                             self.logger.log_event("permission_denied", "CYRAX", {
@@ -1428,7 +1470,8 @@ RESPONSE STYLE:
                         self._actions_executed_this_turn += 1
                         with display.get_spinner("Executing..."):
                             result = self.tools.execute_raw(command)
-                        display.show_tool_output("CYRAX", result.output)
+                        style = "green" if result.success else "red"
+                        display.show_tool_event("shell", command, result.output[:160], style=style)
                         self.logger.log_command("CYRAX", command, result.output, result.exit_code)
                         if result.success:
                             action_results.append(
@@ -1901,7 +1944,57 @@ RESPONSE STYLE:
                 return ""
 
         if cmd == "/status":
-            display.show_campaign_status(self.campaign.to_dict())
+            state = self.campaign.to_dict()
+            state.update({
+                "model": f"{self.model.provider}/{self.model.model_name}",
+                "permission_mode": self._current_mode_label(),
+                "scope": self._session_scope_label(),
+                "streaming": "on",
+                "queued_message": "yes" if self._queued_user_message else "no",
+            })
+            display.show_campaign_status(state)
+            return ""
+
+        if cmd == "/config":
+            work_dir = getattr(self.tools.executor, "work_dir", "")
+            display.show_campaign_status({
+                "provider": self.model.provider,
+                "model": self.model.model_name,
+                "temperature": self.model.temperature,
+                "max_tokens": self.model.max_tokens,
+                "work_dir": work_dir,
+                "scope": self._session_scope_label(),
+                "permission_mode": self._current_mode_label(),
+            })
+            return ""
+
+        if cmd_name == "/model":
+            if cmd_args:
+                self.model.model_name = cmd_args.strip()
+                try:
+                    self.model.client.model = self.model.model_name
+                except Exception:
+                    pass
+                display.show_success(f"Model switched to {self.model.model_name}")
+            else:
+                display.show_info(f"Current model: {self.model.provider}/{self.model.model_name}")
+            return ""
+
+        if cmd_name == "/mode":
+            mode = cmd_args.strip().lower()
+            if not mode:
+                display.show_info(f"Current permission mode: {self._current_mode_label()}")
+            elif mode == "auto":
+                self.permission_gate.auto_approve_all()
+                display.show_success("Permission mode set to auto.")
+            elif mode in ("interactive", "default", "ask"):
+                self.permission_gate.auto_approve = False
+                display.show_success("Permission mode set to interactive.")
+            elif mode == "ci":
+                self.permission_gate.auto_approve = False
+                display.show_info("CI mode is selected automatically when stdin is non-interactive.")
+            else:
+                display.show_info("Usage: /mode [auto|interactive|ci]")
             return ""
 
         if cmd == "/agents":
@@ -2019,7 +2112,24 @@ RESPONSE STYLE:
 
         if cmd == "/auto":
             self.permission_gate.auto_approve_all()
-            display.show_success("Fully autonomous mode enabled. No more permission prompts.")
+            display.show_success("Permission mode set to auto. CYRAX will not prompt for actions.")
+            return ""
+
+        if cmd_name == "/compact":
+            keep = 12
+            if cmd_args:
+                try:
+                    keep = max(1, int(cmd_args.strip()))
+                except ValueError:
+                    display.show_info("Usage: /compact [messages_to_keep]")
+                    return ""
+            removed = self.conversation.compact(keep_recent=keep)
+            display.show_compact_summary(removed, len(self.conversation.messages))
+            return ""
+
+        if cmd == "/clear":
+            self.conversation.clear()
+            display.show_success("Conversation context cleared.")
             return ""
 
         if cmd == "/export":
@@ -2027,26 +2137,7 @@ RESPONSE STYLE:
             return ""
 
         if cmd == "/help":
-            display.show_info(
-                "Available commands:\n"
-                "  /status     - Show campaign status\n"
-                "  /agents     - List active agents (with PID and iteration)\n"
-                "  /kill <id>  - Kill a specific agent by ID\n"
-                "  /killall    - Kill all running agents\n"
-                "  /dashboard  - Show tmux dashboard attach command\n"
-                "  /findings   - Show all findings\n"
-                "  /creds      - Show discovered credentials\n"
-                "  /hosts      - Show discovered hosts\n"
-                "  /usage      - Show model token usage\n"
-                "  /scope [t]  - Show or set target scope\n"
-                "  /approve c  - Pre-approve an action category\n"
-                "  /auto       - Enable fully autonomous mode (no permission prompts)\n"
-                "  /export     - Export findings to report file\n"
-                "  /pause      - Save campaign state and exit\n"
-                "  /help       - Show this help\n"
-                "  /exit       - Exit CYRAX\n"
-                "\nOtherwise, just type naturally to interact with CYRAX."
-            )
+            display.show_help(self._slash_commands())
             return ""
 
         return None
@@ -2131,6 +2222,13 @@ RESPONSE STYLE:
         The AI runs in a background thread so the user can Ctrl+C to interrupt.
         """
         display.show_banner()
+        display.show_session_intro(
+            provider=self.model.provider,
+            model=self.model.model_name,
+            scope=self._session_scope_label(),
+            permission_mode=self._current_mode_label(),
+            streaming=True,
+        )
 
         if self._campaign_mode:
             display.show_cyrax_message(
@@ -2139,10 +2237,7 @@ RESPONSE STYLE:
                 f"Use /pause to save and exit."
             )
         else:
-            display.show_cyrax_message(
-                "Ready. What's the target?\n"
-                "  Ctrl+C to interrupt  |  /help for commands  |  /exit to quit"
-            )
+            display.show_cyrax_message("Ready.")
 
         turn_count = 0
         while True:
@@ -2249,6 +2344,12 @@ RESPONSE STYLE:
                 display.show_error(f"AI error: {self._chat_error}")
 
             turn_count += 1
+            display.show_turn_summary(
+                self._actions_executed_this_turn,
+                self._cmds_succeeded_this_turn,
+                self.model.get_usage(),
+                self.agent_pool.active_count(),
+            )
 
             # Track actions for auto-continue (cap to last 50 to prevent unbounded growth)
             self._turn_action_counts.append(self._actions_executed_this_turn)
@@ -2592,6 +2693,16 @@ def chat_cli(args: argparse.Namespace) -> int:
     if args.campaign:
         cyrax.start_campaign(args.campaign, objective=args.objective)
 
+    prompt = getattr(args, "prompt", "") or getattr(args, "root_prompt", "")
+    if prompt:
+        try:
+            response = cyrax.chat(prompt)
+            if args.print_response:
+                print(response)
+        finally:
+            cyrax.shutdown()
+        return 0
+
     use_tui = args.tui and not args.simple and sys.stdin.isatty()
 
     try:
@@ -2695,13 +2806,19 @@ def create_parser() -> argparse.ArgumentParser:
     )
     preflight_parser.set_defaults(handler=preflight_cli)
 
-    _add_chat_arguments(parser)
+    _add_chat_arguments(parser, prompt_dest="root_prompt")
     parser.set_defaults(handler=chat_cli)
     return parser
 
 
-def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_chat_arguments(parser: argparse.ArgumentParser, prompt_dest: str = "prompt") -> None:
     """Add shared chat runtime flags to a parser."""
+    parser.add_argument(
+        prompt_dest,
+        nargs="?",
+        default="",
+        help="Run one prompt non-interactively, then exit",
+    )
     parser.add_argument(
         "--setup",
         action="store_true",
@@ -2739,6 +2856,12 @@ def _add_chat_arguments(parser: argparse.ArgumentParser) -> None:
         "--simple",
         action="store_true",
         help="Force simple Rich console mode (no Textual TUI)",
+    )
+    parser.add_argument(
+        "--print",
+        dest="print_response",
+        action="store_true",
+        help="Print the full final response after a one-shot prompt",
     )
 
 
