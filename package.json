@@ -1,0 +1,50 @@
+{
+  "name": "cyrax",
+  "version": "2.0.0-upgrade.0",
+  "description": "CYRAX - Autonomous AI Red Team Operator",
+  "type": "module",
+  "bin": {
+    "cyrax": "dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/cli.js",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src tests --ext .ts"
+  },
+  "keywords": [
+    "red-team",
+    "penetration-testing",
+    "security",
+    "ai-agent",
+    "autonomous",
+    "offensive-security",
+    "typescript"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.68.0",
+    "@google/generative-ai": "^0.24.1",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "js-yaml": "^4.1.0",
+    "openai": "^4.104.0",
+    "playwright": "^1.52.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.26.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.15.18",
+    "eslint": "^9.26.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.32.1",
+    "vitest": "^3.1.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

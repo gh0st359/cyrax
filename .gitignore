@@ -43,3 +43,8 @@ coverage.xml
 # Environment
 .env
 .env.local
+
+# Node / TypeScript
+node_modules/
+.vitest/
+*.tsbuildinfo
