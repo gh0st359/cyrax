@@ -287,6 +287,9 @@ _streaming_cursor_visible = False
 _streaming_terminal_cursor_hidden = False
 _streaming_delay = 0.006
 _streaming_min_chunk_size = 1
+_streaming_line_col = 0
+_streaming_gutter = "│ "
+_streaming_word_buffer = ""
 
 
 def configure_streaming(
@@ -309,12 +312,15 @@ def configure_streaming(
 def start_streaming(agent_id: str):
     """Begin streaming output and prepare for a smooth assistant response."""
     global _streaming_buffer, _streaming_active, _streaming_cursor_visible
+    global _streaming_line_col, _streaming_word_buffer
     _streaming_buffer = []
     _streaming_active = True
     _streaming_cursor_visible = False
+    _streaming_line_col = 0
+    _streaming_word_buffer = ""
     console.print()
     console.print("[dim]╭─[/dim] [bold red]cyrax[/bold red] [dim]thinking[/dim]")
-    console.print("[dim]│[/dim] ", end="")
+    console.print(f"[dim]{_streaming_gutter[0]}[/dim] ", end="")
     _hide_terminal_cursor()
 
 
@@ -324,7 +330,7 @@ def stream_token(token: str):
         return
     _streaming_buffer.append(token)
     _erase_stream_cursor()
-    console.file.write(token)
+    _write_stream_text(token)
     _draw_stream_cursor()
     console.file.flush()
 
@@ -333,6 +339,7 @@ def end_streaming():
     """End the streaming display."""
     global _streaming_buffer, _streaming_active
     _erase_stream_cursor()
+    _flush_stream_word(force=True)
     _show_terminal_cursor()
     _streaming_active = False
     console.print()
@@ -408,6 +415,73 @@ def _draw_stream_cursor():
         return
     console.file.write("\x1b[90m▌\x1b[0m")
     _set_cursor_visible(True)
+
+
+def _stream_content_width() -> int:
+    """Return safe assistant text width inside the gutter."""
+    width = getattr(console, "width", 80) or 80
+    return max(20, width - len(_streaming_gutter) - 3)
+
+
+def _write_stream_text(text: str):
+    """Write streamed text with explicit wrapping and gutter continuation."""
+    global _streaming_word_buffer
+    for char in text:
+        if char == "\r":
+            continue
+        if char.isspace():
+            _flush_stream_word()
+            _write_stream_space(char)
+            continue
+        _streaming_word_buffer += char
+
+
+def _write_stream_space(char: str):
+    """Write whitespace while preserving the response gutter."""
+    global _streaming_line_col
+    if char == "\n":
+        console.file.write("\n" + _streaming_gutter)
+        _streaming_line_col = 0
+        return
+    if _streaming_line_col == 0:
+        return
+    if _streaming_line_col + 1 >= _stream_content_width():
+        console.file.write("\n" + _streaming_gutter)
+        _streaming_line_col = 0
+        return
+    console.file.write(" ")
+    _streaming_line_col += 1
+
+
+def _flush_stream_word(force: bool = False):
+    """Write buffered word text with word-boundary wrapping."""
+    global _streaming_line_col, _streaming_word_buffer
+    if not _streaming_word_buffer:
+        return
+    word = _streaming_word_buffer
+    _streaming_word_buffer = ""
+    content_width = _stream_content_width()
+    if (
+        _streaming_line_col
+        and _streaming_line_col + len(word) > content_width
+    ):
+        console.file.write("\n" + _streaming_gutter)
+        _streaming_line_col = 0
+    while len(word) > content_width:
+        remaining = content_width - _streaming_line_col
+        if remaining <= 0:
+            console.file.write("\n" + _streaming_gutter)
+            _streaming_line_col = 0
+            remaining = content_width
+        console.file.write(word[:remaining])
+        word = word[remaining:]
+        _streaming_line_col += remaining
+        if word:
+            console.file.write("\n" + _streaming_gutter)
+            _streaming_line_col = 0
+    if word or force:
+        console.file.write(word)
+        _streaming_line_col += len(word)
 
 
 def _set_cursor_visible(visible: bool):

@@ -59,6 +59,55 @@ def test_configure_streaming_can_disable_cursor(monkeypatch):
     assert "\x1b[?25l" not in rendered
 
 
+def test_stream_token_wraps_with_gutter(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(
+        display,
+        "console",
+        Console(file=output, force_terminal=False, width=32),
+    )
+
+    display.configure_streaming(
+        enabled=True,
+        delay=0,
+        chunk_size=1,
+        show_cursor=False,
+    )
+    display.start_streaming("CYRAX")
+    display.stream_token("abcdefghijklmnopqrstuvwxyz0123456789")
+    display.end_streaming()
+
+    rendered = output.getvalue()
+    assert "│ abcdefghijklmnopqrstuvwxyz0" in rendered
+    assert "│ 123456789" in rendered
+    assert "abcdefghijklmnopqrstuvwxyz0123456789" not in rendered
+
+
+def test_stream_token_wraps_at_word_boundaries(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(
+        display,
+        "console",
+        Console(file=output, force_terminal=False, width=42),
+    )
+
+    display.configure_streaming(
+        enabled=True,
+        delay=0,
+        chunk_size=1,
+        show_cursor=False,
+    )
+    display.start_streaming("CYRAX")
+    display.stream_token(
+        "I am CYRAX, an autonomous AI operator with full shell access."
+    )
+    display.end_streaming()
+
+    rendered = output.getvalue()
+    assert "AI operator\n│ with full shell access." in rendered
+    assert "operator wit\n│ h full" not in rendered
+
+
 def test_prompt_user_uses_user_identity(monkeypatch):
     output = StringIO()
     input_stream = StringIO("/exit\n")
