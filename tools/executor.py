@@ -6,6 +6,7 @@ Executes shell commands and tools with proper sandboxing, timeout, and output ca
 import os
 import re
 import shutil as _shutil
+import shlex
 import subprocess
 import signal
 import tempfile
@@ -16,6 +17,7 @@ from typing import Optional
 from utils.logging import get_logger
 from utils.platform_info import IS_WINDOWS, get_default_work_dir
 from utils.safety import ScopeEnforcer
+from tools.bootstrap import ToolBootstrapper
 
 
 def strip_markdown_fences(command: str) -> str:
@@ -577,15 +579,56 @@ class ToolExecutor:
         timeout: int = 300,
         allow_dangerous: bool = False,
         scope_enforcer: Optional[ScopeEnforcer] = None,
+        auto_install_tools: bool = False,
     ):
         self.work_dir = Path(work_dir) if work_dir else Path(get_default_work_dir())
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.allow_dangerous = allow_dangerous
         self.scope_enforcer = scope_enforcer
+        self.bootstrapper = ToolBootstrapper(
+            auto_install=auto_install_tools,
+            work_dir=self.work_dir,
+        )
         self.env = os.environ.copy()
         self.env["TERM"] = "dumb"  # Prevent color codes in tool output
         self._active_process: Optional[subprocess.Popen] = None
+
+    def _missing_base_tool(self, command: str) -> str:
+        """Return the missing executable for simple shell commands."""
+        stripped = command.strip()
+        if not stripped or stripped.startswith(("cd ", "export ", "source ")):
+            return ""
+        try:
+            tokens = shlex.split(stripped, posix=not IS_WINDOWS)
+        except ValueError:
+            tokens = stripped.split()
+        if not tokens:
+            return ""
+        prefixes = {"sudo", "env", "time", "timeout", "nohup", "command"}
+        idx = 0
+        while idx < len(tokens) and "=" in tokens[idx] and not tokens[idx].startswith("="):
+            idx += 1
+        while idx < len(tokens) and tokens[idx] in prefixes:
+            prefix = tokens[idx]
+            idx += 1
+            if prefix == "env":
+                while idx < len(tokens) and "=" in tokens[idx]:
+                    idx += 1
+            while idx < len(tokens) and tokens[idx].startswith("-"):
+                idx += 1
+        if idx >= len(tokens):
+            return ""
+        base = tokens[idx]
+        if "/" in base or "\\" in base:
+            return ""
+        shell_builtins = {
+            "echo", "printf", "test", "[", "true", "false", "read", "alias",
+            "type", "ulimit", "pwd", "set", "unset", "exit", "return",
+            "if", "then", "else", "fi", "for", "while", "do", "done", "case",
+            "esac", "function", "{", "}",
+        }
+        return "" if base in shell_builtins or _shutil.which(base) else base
 
     def _is_dangerous(self, command: str) -> bool:
         """Check if a command is potentially dangerous."""
@@ -719,6 +762,25 @@ class ToolExecutor:
             msg = f"Blocked dangerous command: {command}"
             logger.log_error("executor", msg)
             return CommandResult(command, "", msg, -1)
+
+        missing_tool = self._missing_base_tool(command)
+        if missing_tool:
+            bootstrap = self.bootstrapper.bootstrap(
+                missing_tool,
+                reason=f"Required by command: {command}",
+            )
+            if not bootstrap.success:
+                guidance = bootstrap.guidance
+                if bootstrap.attempted and bootstrap.output:
+                    guidance = (
+                        f"Auto-install attempted with: {bootstrap.command}\n"
+                        f"{bootstrap.output}\n\n{guidance}"
+                    )
+                logger.log_error("executor", guidance)
+                return CommandResult(command, "", guidance, 127)
+            logger.info(
+                f"Bootstrapped missing tool '{missing_tool}' via: {bootstrap.command}"
+            )
 
         exec_timeout = timeout or self.timeout
         exec_cwd = cwd or str(self.work_dir)
