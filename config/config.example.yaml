@@ -54,6 +54,16 @@ tools:
   # Leave empty or omit for auto-detect (uses system temp dir)
   # Linux/macOS: /tmp/cyrax  |  Windows: C:\Users\<user>\AppData\Local\Temp\cyrax
   work_dir: ""
+  # If true, CYRAX can bootstrap safe missing tools (nmap, jq, ffuf, etc.)
+  auto_install: false
+
+# Autonomy settings
+autonomy:
+  # Heartbeat daemon monitors long-running work and writes .cyrax/HEARTBEAT.json
+  heartbeat: true
+  heartbeat_interval: 1800
+  # Also accepted by tools.auto_install. Kept here for one-stop autonomy config.
+  auto_install_tools: false
 
 # Memory settings
 memory:

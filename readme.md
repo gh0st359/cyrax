@@ -106,6 +106,9 @@ agents/                     # Recon, exploit, post, AD, web, cloud, OSINT agents
 models/                     # Anthropic, OpenAI/xAI/custom, Google, Ollama clients
 tools/                      # Shell executor, tool registry, browser automation
 memory/                     # Conversation, campaign, mission, knowledge stores
+skills/                     # Markdown skill discovery and loading
+daemon/                     # Gateway and heartbeat runtime
+recovery/                   # Autonomous failure recovery strategies
 utils/                      # Safety/scope, action parsing, display, logging
 config/                     # YAML config and orchestrator prompt
 src/                        # TypeScript backend work-in-progress
@@ -122,6 +125,9 @@ src/                        # TypeScript backend work-in-progress
 | `/scope [target]`| Switch target scope (resets previous)          |
 | `/add-dir <path>`| Add a directory to workspace scope             |
 | `/plan`         | Enter plan mode — analyze before executing     |
+| `/skill`        | List/reload/show/use Markdown skills           |
+| `/heartbeat`    | Show daemon heartbeat health                   |
+| `/daemon`       | Show gateway/runtime event state               |
 | `/auto`         | Enable fully autonomous permissions            |
 | `/approve <cat>`| Pre-approve an action category                 |
 | `/compact [n]`  | Summarize older context (keep last n messages) |
@@ -141,9 +147,20 @@ Copy `config/config.example.yaml` to `config/config.yaml`, or run `cyrax configu
 
 - **Model provider and credentials**
 - **Tool execution settings** (timeouts, working directory)
+- **Autonomy settings** (heartbeat and safe tool bootstrap)
 - **Memory settings** (database path, history limits)
 - **Logging settings** (log directory, verbosity)
 - **Display settings** (reasoning visibility, themes)
+
+## Autonomy Upgrades
+
+CYRAX can now recover from missing capabilities instead of stopping:
+
+- **Skills**: Add `SKILL.md` playbooks under `.cyrax/skills/<name>/` or `~/.cyrax/skills/<name>/`. Frontmatter supports `name`, `description`, `trigger`, `tools`, and `auto_load`.
+- **Tool bootstrap**: When a command needs a missing binary, CYRAX returns install guidance or can auto-install safe mapped tools when `tools.auto_install: true`.
+- **Heartbeat daemon**: CYRAX writes liveness state to `.cyrax/HEARTBEAT.json` and tracks turn/agent health for long-running work.
+- **Gateway events**: Runtime events are persisted under `.cyrax/runtime/` for session recovery and inspection.
+- **Recovery loop**: Failures inject concrete alternate strategies so the model diagnoses, bootstraps, scripts around, or changes tactics.
 
 ## Multi-Agent System
 
